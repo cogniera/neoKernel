@@ -100,9 +100,14 @@ class WorkflowTests(unittest.TestCase):
 
     def test_guard_staged_rmsnorm(self):
         root = Path(__file__).resolve().parents[1]
-        original = snapshot(root/"engine")
-        live_original = dict(original)
-        original['engine.py'] = (root/'neokernel/native_engine.py').read_bytes()
+        live_original = snapshot(root/"engine")
+        # This exercises the explicit starter-only adapter, not the current
+        # candidate's independently evolving kernel package and tunables.
+        original = {
+            'engine.py': (root/'neokernel/native_engine.py').read_bytes(),
+            'kernels/__init__.py': b'"""Starter kernels."""\n',
+            'kernels/rmsnorm.py': (root/'tests/fixtures/starter_rmsnorm.py').read_bytes(),
+        }
         with tempfile.TemporaryDirectory() as tmp:
             staged = Path(tmp)/"engine"
             restore(staged, original)

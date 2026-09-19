@@ -27,6 +27,34 @@ Official native decode accounts for approximately 96, 76, and 94 percent of publ
 
 ## Numerics and integration
 
+### Hand-rolled decode controls
+
+The hand-rolled decode candidate exposes `CONFIG` and scalar `TUNABLES` in
+`engine/kernels/__init__.py`. Values are fixed before engine construction and
+graph capture; changing them requires a new process and a new harness run.
+Do not claim a configuration is frozen until its complete freeze passes.
+
+| CONFIG key | True / selected path | Fallback / alternative |
+| --- | --- | --- |
+| `fuse_norm_residual` | Rounded attention residual plus post-attention RMSNorm in one kernel | Separate BF16 add followed by RMSNorm |
+| `fuse_qk_norm_rope` | Q/K head norm, RoPE and K/V write in one kernel | Separate head norm then RoPE and K/V write |
+| `fuse_silu_mul` | SiLU and product with intermediate BF16 rounding | Native ATen SiLU then multiply |
+| `attention_impl` | `triton`: two-pass split attention with a device position | `sdpa_grouped`: four query rows per KV head and a boolean prefix mask |
+| `kv_layout` | `bhsd`: contiguous head/sequence cache | `bshd`: sequence/head storage exposed as a logical BHSD view |
+
+`TUNABLES` supplies `norm`, `qk`, `silu`, and `attention` BLOCK sizes, num_warps,
+and num_stages; `merge` supplies num_warps and num_stages. Norm BLOCK must be a
+power of two at least 2560, and Q/K BLOCK a power of two at least 128. Attention
+and SiLU BLOCK sizes must be powers of two. Invalid launch sizes are rejected,
+not silently substituted. Scalar values describe the current candidate;
+the numeric sweep can replace each with search choices before staging trials.
+
+Packed QKV and gate/up weights come from loaded modules. Native prefill modules
+retain identical contiguous weight views into the packed storage. Prefill stays
+on causal Transformers and writes the same cache read by custom decode. Tests
+must cover prefill handoff, graph replay, consecutive calls with fresh prompts,
+and both attention implementations before any keep decision.
+
 Reduce in fp32, cast the normalized value to bf16 before multiplying by the weight. As the starter explains: "Reorder arithmetic freely; do not reformulate it." Never move a cast across an operation. Every new kernel must be compared with the Transformers 4.51.3 module it replaces on random inputs before integration. Then run a complete-generation comparison, including two calls with different prompts. A per-kernel check does not replace sequence replay.
 
 TTFT and TPOT each above 1.05 times local native (official Dryft uses 1.10) fail even when throughput improves. Memory above 90 percent fails. Spread above 25 percent fails. An occasional compile or slow path can violate spread. Load plus one warmup and each sample must each fit 300 seconds. Allocate, compile, and capture during warmup when shapes are known.

@@ -1,6 +1,12 @@
 """Decode choices; numeric values are compatible with neokernel.sweep."""
 
-CONFIG = {'fuse_norm_residual': True, 'fuse_qk_norm_rope': True, 'fuse_silu_mul': True, 'attention_impl': 'triton', 'kv_layout': 'bhsd'}
+CONFIG = {
+    "fuse_norm_residual": True,
+    "fuse_qk_norm_rope": True,
+    "fuse_silu_mul": True,
+    "attention_impl": "triton",
+    "kv_layout": "bhsd",
+}
 
 TUNABLES = {
     "norm.BLOCK": 4096,
