@@ -1,0 +1,13 @@
+# Judge contract review
+
+The local CPU suite now runs under Python 3.11 with torch 2.5.1+cpu and Transformers 4.51.3. This review addresses the requested timing and correctness checks without changing engine/.
+
+* Replay slices logits at S-1 through S+N-2 inclusive and forwards the prompt concatenated with the emitted prefix with use_cache=False. A position-coded stand-in test fails if either endpoint is shifted.
+* torch.max returns the first index for an exact tie. Tests distinguish a lowest-index argmax from a passing alternate tied token counted as a near tie.
+* The parent reader timestamps immediately after readline returns, before JSON parsing. Generation messages carry token lists, not trusted child timestamps. A protocol test sends a bogus child timestamp and confirms it does not control measured time. Child-side profiling clocks apply only to diagnostic profiles.
+* A private CPU torch.Generator draws prompts after candidate readiness. Warmup and measured prompt matrices are checked for duplication, including re-drawing accidental collisions. Tests force collisions and confirm distinct prompts reach the child, without changing the global RNG.
+* Exactly N lists, each containing exactly B Python ints in vocabulary range, are required. Existing subprocess tests cover short, extra, and bool output; arithmetic tests also cover tuples, floats, and out-of-range IDs.
+* The child reads the per-sample allocator peak after each complete generation. It now retains a lifetime high-water mark across resets, including load and warmup, and reports it on a final memory request after all samples. The memory gate uses both the per-sample and lifetime peaks. This fixes a review finding where temporary load/warmup allocation could previously escape the gate.
+* Windows starts a hidden interpreter with the absolute running Python executable and UTF-8 pipes. Linux starts a new session for process-group termination. The subprocess tests run on Windows; explicit launch-option tests cover both configurations. The CPU-only Modal runtime probe also successfully launched a Linux subprocess and reported posix.
+
+Remaining differences from the private Dryft evaluator are unchanged: random token prompts instead of its private corpus, process separation without a separate OS identity/network sandbox, and a resident independent reference model. Local results do not provide Dryft's signed attestation. GPU correctness has passed and the operator accepted host-speed calibration residuals; see CALIBRATION.md. Local latency gates use 1.05 times paired native medians. Child timestamps and CPU time are diagnostics only.
