@@ -53,6 +53,10 @@ class GraphEngineTests(unittest.TestCase):
         mask = torch.zeros((2, 1, 1, 9), dtype=torch.bool)
         with torch.inference_mode():
             for _ in range(2):
+                # A fresh prompt must overwrite every active cache slot and
+                # attention must never consume the unused capacity.
+                for tensor in cache.key_cache + cache.value_cache:
+                    tensor.fill_(123.0)
                 mask.zero_()
                 mask[:, :, :, :5].fill_(True)
                 sequence = torch.randint(0, 32, (2, 5))

@@ -22,10 +22,14 @@ class PrefixStaticCache(StaticCache):
             raise ValueError("invalid kv_layout")
 
     def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
-        keys, values = super().update(key_states, value_states, layer_idx, cache_kwargs)
         if self.prefill_length:
-            return keys[:, :, :self.prefill_length, :], values[:, :, :self.prefill_length, :]
-        return keys, values
+            # generate() prefills the entire prompt starting at position zero.
+            # Populate the fixed decode cache without indexed writes, and let
+            # prefill attention consume the original native K/V tensors.
+            self.key_cache[layer_idx][:, :, :self.prefill_length, :].copy_(key_states)
+            self.value_cache[layer_idx][:, :, :self.prefill_length, :].copy_(value_states)
+            return key_states, value_states
+        return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
 
 @torch.inference_mode()
@@ -39,8 +43,9 @@ def qwen_forward(model, input_ids, cache, cache_position, position_ids, attentio
             past_key_value=cache, use_cache=True, cache_position=cache_position,
             position_embeddings=position_embeddings,
         )[0]
-    x = base.norm(x)
-    return model.lm_head(x[:, -1:, :])
+    # RMSNorm is independent across tokens; only the final logits are used.
+    x = base.norm(x[:, -1:, :])
+    return model.lm_head(x)
 
 
 class Engine:
