@@ -4,7 +4,7 @@ Decode `Qwen/Qwen3-4B-Instruct-2507` at revision
 `cdbee75f17c01a7cc42f958dc650907174af0554`, BF16, on one H100
 
 `engine/engine.py` is the baseline: Transformers, BF16, greedy decode with a KV
-cache.
+cache
 
 Read the [Docs](https://htn.dryft.ai/docs) before you optimize
 (workloads, timing, output rule, scoring). `QWEN_ENGINE_CONTRACT.md` is the same
