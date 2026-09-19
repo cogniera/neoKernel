@@ -75,6 +75,8 @@ class Engine:
 
     def prepare(self, batch, prompt_length, output_length):
         self.graph = None
+        self.prefill_graph = None
+        self.prompt_ids = torch.empty((batch, prompt_length), device="cuda:0", dtype=torch.int64)
         self.shape = (batch, prompt_length, output_length)
         capacity = prompt_length + output_length
         self.cache = PrefixStaticCache(
@@ -121,6 +123,23 @@ class Engine:
             self.next_tokens = self.decode()
         torch.cuda.current_stream().wait_stream(stream)
 
+    def prefill(self):
+        logits = qwen_forward(self.model, self.prompt_ids, self.cache, self.prefill_positions,
+                              self.prefill_positions.unsqueeze(0), None)
+        self.token_ids.copy_(logits[:, -1, :].argmax(dim=-1, keepdim=True))
+
+    def capture_prefill(self):
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            for _ in range(2):
+                self.prefill()
+        torch.cuda.current_stream().wait_stream(stream)
+        self.prefill_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self.prefill_graph, stream=stream):
+            self.prefill()
+        torch.cuda.current_stream().wait_stream(stream)
+
     def generate(self, input_ids, max_new_tokens):
         if max_new_tokens <= 0:
             return
@@ -131,12 +150,12 @@ class Engine:
             self.decode_mask.zero_()
             self.decode_mask[:, :, :, :prompt_length].fill_(True)
             self.cache_position.fill_(prompt_length)
-            prompt = torch.tensor(input_ids, dtype=torch.int64, device="cuda:0")
+            self.prompt_ids.copy_(torch.tensor(input_ids, dtype=torch.int64, device="cuda:0"))
             self.cache.prefill_length = prompt_length
-            logits = qwen_forward(self.model, prompt, self.cache, self.prefill_positions,
-                                  self.prefill_positions.unsqueeze(0), None)
+            if self.prefill_graph is None:
+                self.capture_prefill()
+            self.prefill_graph.replay()
             self.cache.prefill_length = 0
-            self.token_ids.copy_(logits[:, -1, :].argmax(dim=-1, keepdim=True))
             if max_new_tokens > 1 and self.graph is None:
                 self.capture_decode()
             yield self.token_ids[:, 0].tolist()

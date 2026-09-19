@@ -19,6 +19,19 @@ from neokernel.accounting import SpendLedger, estimate_usd
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_incremental_task_budget_preserves_reservation_stop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / 'hand_rolled_budget.json').write_text(json.dumps(
+                {'start_estimated_usd': 3.7, 'limit_usd': 4.0}))
+            (directory / 'setup.json').write_text(json.dumps({'estimated_usd': 4.9}))
+            ledger = SpendLedger(directory)
+            self.assertAlmostEqual(ledger.ceiling(), 7.7)
+            ledger.reserve('H100')
+            (directory / 'setup.json').write_text(json.dumps({'estimated_usd': 7.0}))
+            with self.assertRaises(ValueError):
+                ledger.reserve('H100')
+
     def test_ceiling_increases_only_after_kept_optimization(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)

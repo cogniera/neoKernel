@@ -51,6 +51,7 @@ class HandRolledHandoffTests(unittest.TestCase):
                     self.assertTrue(all(len(step) == batch for step in generated))
                     self.assertLess(load_s + warmup_s, 120, 'load plus warmup exceeds local target')
                     graph = engine.graph
+                    prefill_graph = engine.prefill_graph
                     addresses = (engine.token_ids.data_ptr(), engine.buffers.x.data_ptr(),
                                  engine.cache.key_cache[0].data_ptr())
                     for sample in range(2):
@@ -61,6 +62,7 @@ class HandRolledHandoffTests(unittest.TestCase):
                         actual_logits = engine.logits.clone()
                         generator.close()
                         self.assertIs(engine.graph, graph)
+                        self.assertIs(engine.prefill_graph, prefill_graph)
                         self.assertEqual(addresses, (engine.token_ids.data_ptr(), engine.buffers.x.data_ptr(),
                                                      engine.cache.key_cache[0].data_ptr()))
                         first_ids = torch.tensor(first, device='cuda').view(batch, 1)

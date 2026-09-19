@@ -27,6 +27,12 @@ class SpendLedger:
         self.path = directory / "spend.json"
 
     def ceiling(self):
+        task_path = self.directory / "hand_rolled_budget.json"
+        if task_path.exists():
+            task = json.loads(task_path.read_text())
+            # This attended task has an explicit incremental budget. Include
+            # historical spending without charging it against that allowance.
+            return float(task["start_estimated_usd"]) + float(task["limit_usd"])
         # A baseline marked kept is not an optimization experiment.
         return 6.0 if any(r.get('proposer') in {'agent', 'codex'} and r.get('kept') and r.get('files_changed')
                           and r.get('guard') == 'pass' for r in read_log(self.directory)) else STOP_USD
