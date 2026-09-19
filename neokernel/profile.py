@@ -58,6 +58,8 @@ def profile_engine(engine_dir: Path, model_path: str, w: Workload, model, tokeni
     finally:
         child.close()
     result = aggregate_events(raw["events"], raw["step_wall_ms"], raw.get("byte_estimates"))
+    for key in ['kernel_count', 'graph_launch_count', 'sync_calls', 'runtime_calls', 'trace']:
+        result[key] = raw.get(key)
     params = sum(p.numel() for p in model.parameters())
     weights = sum(p.numel()*p.element_size() for p in model.parameters())
     result["floors"] = physics_floors(weights, params, w.batch, w.S, w.N, declares_speculative(engine_dir))

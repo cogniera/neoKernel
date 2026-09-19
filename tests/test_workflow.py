@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from neokernel.guard import GuardError, check
-from neokernel.loop import apply_proposal, patch_paths, history_summary, validate_proposal, retry_call
+from neokernel.loop import apply_proposal, validate_files, generated_diff, history_summary, validate_proposal, retry_call
 from neokernel.profile import aggregate_events
 from neokernel.schema import Proposal, select_workloads
 from neokernel.storage import Budget, append_log, read_log, restore, seed_native, snapshot
@@ -19,6 +19,37 @@ from neokernel.accounting import SpendLedger, estimate_usd
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_ceiling_increases_only_after_kept_optimization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            ledger = SpendLedger(directory)
+            baseline = {'proposer': 'agent', 'kept': True, 'files_changed': [], 'guard': 'pass'}
+            (directory/'log.jsonl').write_text(json.dumps(baseline)+'\n')
+            self.assertEqual(ledger.ceiling(), 3)
+            baseline['files_changed'] = ['engine/engine.py']
+            baseline['kept'] = False
+            (directory/'log.jsonl').write_text(json.dumps(baseline)+'\n')
+            self.assertEqual(ledger.ceiling(), 3)
+            baseline['kept'] = True
+            (directory/'log.jsonl').write_text(json.dumps(baseline)+'\n')
+            self.assertEqual(ledger.ceiling(), 6)
+
+    def test_whole_file_schema_and_full_context(self):
+        from neokernel.loop import context
+        data = dict(item='static_kv_cache', hypothesis='faster', expected_effect='speed', risk='latency',
+                    reasoning='one sentence', files={'engine/kernels/x.py': ''})
+        self.assertEqual(Proposal.parse(data).files, data['files'])
+        for invalid in ['diff', {}, {'engine/engine.py': None}]:
+            with self.assertRaises(ValueError):
+                Proposal.parse(dict(data, files=invalid))
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp)/'engine'
+            restore(engine, {'engine.py': b'complete main', 'kernels/x.py': b'complete kernel', 'notes.txt': b'notes'})
+            messages = context(engine, {'trace': {'traceEvents': []}, 'graph_launch_count': 1}, [])
+            self.assertEqual(json.loads(messages[1]['content'])['profile'], {'graph_launch_count': 1})
+            self.assertEqual(json.loads(messages[1]['content'])['current_files'],
+                             {'engine/engine.py': 'complete main', 'engine/kernels/x.py': 'complete kernel'})
+
     def test_spend_reservation_and_tier_rates(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = SpendLedger(Path(tmp))
@@ -45,25 +76,33 @@ class WorkflowTests(unittest.TestCase):
     def test_patch_scope(self):
         for target in ["neokernel/judge.py", "engine/../secret.py", "engine/kernels/../../x.py", "engine/x.py"]:
             with self.subTest(target=target), self.assertRaises(ValueError):
-                patch_paths(f"--- a/{target}\n+++ b/{target}\n@@ -1 +1 @@\n-x\n+y\n")
+                validate_files({target: 'value = 2\n'})
 
     def test_patch_apply_and_restore(self):
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp)/"engine"
             restore(engine, {"engine.py": b"value = 1\n"})
             before = snapshot(engine)
-            patch_text = "--- a/engine/engine.py\n+++ b/engine/engine.py\n@@ -1 +1 @@\n-value = 1\n+value = 2\n"
-            self.assertEqual(apply_proposal(engine, patch_text), ["engine/engine.py"])
-            self.assertEqual((engine/"engine.py").read_text(), "value = 2\n")
+            files = {'engine/engine.py': 'value = 2\n', 'engine/kernels/new.py': 'x = 1\n'}
+            self.assertEqual(apply_proposal(engine, files), ['engine/engine.py', 'engine/kernels/new.py'])
+            self.assertEqual((engine/'engine.py').read_text(), 'value = 2\n')
+            self.assertIn('new file mode', generated_diff(before, snapshot(engine)))
+            apply_proposal(engine, {'engine/kernels/new.py': ''})
+            self.assertFalse((engine/'kernels/new.py').exists())
+            self.assertEqual((engine/'engine.py').read_text(), 'value = 2\n')
+            for files in [{'engine/engine.py': ''}, {'engine/engine.py': 'changed', 'engine/../x.py': 'bad'}]:
+                saved = snapshot(engine)
+                with self.assertRaises(ValueError):
+                    apply_proposal(engine, files)
+                self.assertEqual(snapshot(engine), saved)
             restore(engine, before)
-            self.assertEqual(snapshot(engine), before)
-            with self.assertRaises(ValueError):
-                apply_proposal(engine, patch_text.replace("value = 1", "value = 99"))
             self.assertEqual(snapshot(engine), before)
 
     def test_guard_staged_rmsnorm(self):
         root = Path(__file__).resolve().parents[1]
         original = snapshot(root/"engine")
+        live_original = dict(original)
+        original['engine.py'] = (root/'neokernel/native_engine.py').read_bytes()
         with tempfile.TemporaryDirectory() as tmp:
             staged = Path(tmp)/"engine"
             restore(staged, original)
@@ -73,7 +112,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(tunables(init.read_text())["rmsnorm.num_warps"], [4, 8, 16])
             init.write_text(set_tunables(init.read_text(), {"rmsnorm.num_warps": 4}))
             self.assertIn("TUNABLES", (staged/"kernels"/"rmsnorm.py").read_text())
-        self.assertEqual(snapshot(root/"engine"), original)
+        self.assertEqual(snapshot(root/"engine"), live_original)
 
     def test_tunable_preservation_and_randomness(self):
         source = '"""helpers"""\nTUNABLES = {"a": [1, 2]}\ndef helper(): return 4\n'
@@ -119,9 +158,12 @@ class WorkflowTests(unittest.TestCase):
             budget.reserve(3600)
 
     def test_move_on(self):
+        self.assertEqual(history_summary([{'item': 'cuda_graph_decode', 'proposer': 'codex', 'kept': True,
+                                          'implemented_items': ['static_kv_cache', 'bypass_wrapper']}])['kept'],
+                         ['bypass_wrapper', 'cuda_graph_decode', 'static_kv_cache'])
         records = [{"item": "static_kv_cache", "proposer": "agent", "kept": False}]*5
         self.assertEqual(history_summary(records)["reverts"]["static_kv_cache"], 5)
-        proposal = Proposal("static_kv_cache", "faster", "1%", "diff", "latency", "one sentence")
+        proposal = Proposal("static_kv_cache", "faster", "1%", {"engine/engine.py": "content"}, "latency", "one sentence")
         with self.assertRaises(ValueError):
             validate_proposal(proposal, ["static_kv_cache"], records)
 

@@ -59,7 +59,7 @@ def read_log(directory: Path = RESULTS) -> list[dict]:
 
 
 def append_log(result: dict | None, *, proposer="human", item="manual", hypothesis="",
-               kept=False, note="", files_changed=None, guard="pass", patch_sha256=None,
+               kept=False, note="", files_changed=None, guard="pass", patch_sha256=None, proposal_sha256=None, diff='', implemented_items=None,
                directory: Path = RESULTS) -> dict:
     records = read_log(directory)
     previous = next((r for r in reversed(records) if r.get("kept") and r.get("geomean_tps")), None)
@@ -73,7 +73,8 @@ def append_log(result: dict | None, *, proposer="human", item="manual", hypothes
            "delta_pct": (score / previous["geomean_tps"] - 1) * 100 if score and previous else None,
            "kept": kept, "gpu_seconds": result.get("gpu_seconds", 0) if result else 0, "note": note,
            "engine_sha256": result.get("engine_sha256") if result else None,
-           "patch_sha256": patch_sha256}
+           "patch_sha256": patch_sha256, "proposal_sha256": proposal_sha256, "diff": diff,
+           "implemented_items": implemented_items or []}
     row = asdict(LogLine(**row))
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / "log.jsonl").open("a", encoding="utf-8") as stream:

@@ -34,3 +34,7 @@ TTFT and TPOT each above 1.05 times local native (official Dryft uses 1.10) fail
 No quantization, approximate or sparse attention, cache eviction, unverified draft models, timing access, CUDA events, cached outputs across calls, evaluator mutation, or edits outside scope. Never repeat a patch that failed guard. After five reverted attempts at an item, move on. One hypothesis per proposal and one line of hypothesis per experiment.
 
 The dynamic context contains the current engine and kernels, current diff, at most 15 verbatim log lines, counts summarizing older attempts, a coverage list of unattempted items, and the current profile. Read the kernel table alongside gap_ms, the bandwidth and prefill floors, and per-kernel speed-of-light ratios where bytes are derivable. Unknown byte counts are null, not zero. Prioritize the operation or host gap with the largest distance to its floor. Profiler overhead and overlapping streams can distort summed kernel time; use the interval-union metric too.
+
+## Whole-file proposal format
+
+Return a files object mapping scoped paths to their complete new contents. Return complete files, never fragments or unified diffs. Do not add comments describing what changed. A file not listed remains unchanged. An empty string deletes a file only under engine/kernels/; engine/engine.py may never be deleted or emptied. The context contains the complete current content of every file in the write scope. The harness writes replacements and asks Git to generate the logged diff.

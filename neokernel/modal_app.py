@@ -208,6 +208,20 @@ def profile_remote(engine_tar: bytes, workload: dict) -> dict:
 
 
 @app.function(**REMOTE)
+def profile_h100_remote(engine_tar: bytes, workload: dict) -> dict:
+    from .profile import profile_engine
+    started = time.perf_counter()
+    cpu_diagnostics()
+    model, tokenizer = reference()
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = extract(engine_tar, Path(tmp))
+        result = profile_engine(engine, MODEL_PATH, Workload(**workload), model, tokenizer)
+    result['gpu_seconds'] = time.perf_counter()-started
+    result['gpu_tier'] = 'H100'
+    return result
+
+
+@app.function(**REMOTE)
 def race_remote(engine_tars: list[bytes], workload: dict):
     """Stream sequential, same-prompt runs; avoid two candidates contending on H100."""
     import queue

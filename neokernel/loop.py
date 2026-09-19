@@ -22,62 +22,76 @@ PLAYBOOK = ["static_kv_cache", "bypass_wrapper", "cuda_graph_decode", "concat_qk
 
 
 def allowed_path(name: str) -> bool:
-    return ("\\" not in name and ":" not in name and ".." not in name.split("/") and
-            (name == "engine/engine.py" or (name.startswith("engine/kernels/") and name.endswith(".py"))))
+    if not isinstance(name, str) or any(part in {'', '.', '..'} for part in name.split('/')):
+        return False
+    if any(c in name for c in ['\\', ':', '\x00']) or name.startswith('/'):
+        return False
+    return name == 'engine/engine.py' or (name.startswith('engine/kernels/') and name.endswith('.py'))
 
 
-def patch_paths(patch: str) -> set[str]:
-    """Refuse metadata operations and ambiguous paths before invoking git apply."""
-    found = set()
-    if len(patch.encode()) > 2*1024*1024:
-        raise ValueError("patch exceeds source budget")
-    for line in patch.splitlines():
-        if line.startswith(("rename ", "copy ", "GIT binary patch", "Binary files", "old mode", "new mode", "new file mode 120", "index ")):
-            if line.startswith("index ") and not line.endswith(" 120000"):
-                continue
-            raise ValueError("patch may contain only regular-file unified text edits")
-        if line.startswith(("--- ", "+++ ")):
-            name = line[4:]
-            if name == "/dev/null":
-                continue
-            if name.startswith(("a/", "b/")):
-                name = name[2:]
-            if not allowed_path(name):
-                raise ValueError(f"patch outside write scope: {name}")
-            found.add(name)
-    if not found:
-        raise ValueError("patch contains no editable file hunks")
-    return found
+def validate_files(files: dict[str, str]) -> set[str]:
+    if not isinstance(files, dict) or not files:
+        raise ValueError('files must be a nonempty mapping')
+    for name, content in files.items():
+        if not allowed_path(name) or not isinstance(content, str):
+            raise ValueError(f'file outside write scope or invalid content: {name}')
+        if name == 'engine/engine.py' and not content.strip():
+            raise ValueError('engine/engine.py may never be deleted or emptied')
+    if len(files) > 200 or sum(len(v.encode('utf-8')) for v in files.values()) > 2*1024*1024:
+        raise ValueError('replacement files exceed source budget')
+    return set(files)
 
 
-def apply_proposal(engine_dir: Path, patch: str) -> list[str]:
-    """Validate in a temporary tree, then copy scoped changes without touching Git's index."""
-    requested = patch_paths(patch)
+def proposal_digest(files):
+    return hashlib.sha256(json.dumps(files, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
+def apply_proposal(engine_dir: Path, files: dict[str, str]) -> list[str]:
+    validate_files(files)
+    root = engine_dir.resolve()
     before = snapshot(engine_dir)
+    targets = {}
+    for name, content in files.items():
+        relative = name.removeprefix('engine/')
+        target = engine_dir / relative
+        if not target.resolve().is_relative_to(root) or any(p.is_symlink() or getattr(p, 'is_junction', lambda: False)() for p in [target, *target.parents] if p != root.parent):
+            raise ValueError('replacement target escapes engine or traverses a link')
+        targets[relative] = (target, content)
+    try:
+        for relative, (target, content) in targets.items():
+            if content == '':
+                target.unlink(missing_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding='utf-8', newline='\n')
+        after = snapshot(engine_dir)
+        changed = sorted('engine/'+name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+        if not changed:
+            raise ValueError('replacement files had no effect')
+        return changed
+    except BaseException:
+        restore(engine_dir, before)
+        raise
+
+
+def generated_diff(before: dict, after: dict) -> str:
+    """Git compares snapshots so new, deleted, and previously uncommitted files appear."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        staged = root / "engine"
-        restore(staged, before)
-        patch_file = root / "proposal.diff"
-        patch_file.write_text(patch, encoding="utf-8", newline="\n")
-        environment = dict(os.environ, GIT_CEILING_DIRECTORIES=str(root.parent))
-        for extra in (["--check"], []):
-            run = subprocess.run(["git", "apply", *extra, "--", str(patch_file)], cwd=root,
-                                 env=environment, capture_output=True, text=True)
-            if run.returncode:
-                raise ValueError("patch_failed: " + run.stderr.strip())
-        after = snapshot(staged)
-        changed = {"engine/"+name for name in before.keys() | after.keys() if before.get(name) != after.get(name)}
-        if not changed or not changed <= requested or any(not allowed_path(name) for name in changed):
-            raise ValueError("patch changed unexpected paths or had no effect")
-        restore(engine_dir, after)
-    return sorted(changed)
+        restore(root/'before'/'engine', before)
+        restore(root/'after'/'engine', after)
+        result = subprocess.run(['git', '-c', 'core.autocrlf=false', 'diff', '--no-index', '--no-ext-diff',
+                                 '--src-prefix=a/', '--dst-prefix=b/', '--', 'before', 'after'],
+                                cwd=root, capture_output=True, text=True, encoding='utf-8')
+        if result.returncode not in (0, 1):
+            raise RuntimeError('git diff failed: '+result.stderr.strip())
+        return result.stdout.replace('a/before/', 'a/').replace('b/after/', 'b/').replace('a/after/', 'a/').replace('b/before/', 'b/')
 
 
 def history_summary(records: list[dict]) -> dict:
     tried = Counter(r["item"] for r in records if r.get("proposer") == "agent")
     reverted = Counter(r["item"] for r in records if r.get("proposer") == "agent" and not r.get("kept"))
-    kept = sorted({r["item"] for r in records if r.get("kept")})
+    kept = sorted({item for r in records if r.get('kept') for item in [r['item'], *r.get('implemented_items', [])]})
     return {"attempts": dict(tried), "reverts": dict(reverted), "kept": kept,
             "coverage": [item for item in PLAYBOOK if not tried[item]]}
 
@@ -85,10 +99,11 @@ def history_summary(records: list[dict]) -> dict:
 def context(engine_dir: Path, profile: dict, records: list[dict]) -> list[dict]:
     program = Path(__file__).with_name("program.md").read_text(encoding="utf-8")
     static = program + "\nGuard rules: only torch, triton, transformers, safetensors, math, os (read-only), typing, dataclasses, functools, itertools, collections, json, and local engine modules. No timers, CUDA events, exec/eval, importlib, subprocess, socket, writes, module mutation, or environment mutation. Literal disabling TF32 is the sole module-setting exception.\nReturn a proposal matching this schema:\n" + json.dumps(PROPOSAL_SCHEMA, sort_keys=True)
-    files = {name: data.decode("utf-8") for name, data in snapshot(engine_dir).items() if name.endswith(".py")}
+    files = {"engine/"+name: data.decode("utf-8") for name, data in snapshot(engine_dir).items() if allowed_path("engine/"+name)}
     diff = subprocess.run(["git", "diff", "--", "engine/"], cwd=ROOT, capture_output=True, text=True).stdout
     dynamic = {"last_15_log_lines": records[-15:], "history": history_summary(records),
-               "profile": profile, "current_files": files, "current_diff": diff}
+               "profile": {k: v for k, v in profile.items() if k != 'trace'},
+               "current_files": files, "current_diff": diff}
     return [{"role": "system", "content": static}, {"role": "user", "content": json.dumps(dynamic)}]
 
 
@@ -163,9 +178,9 @@ def validate_proposal(proposal: Proposal, items: list[str], records: list[dict])
         raise ValueError("move-on rule: this item already has five reverts")
     if proposal.item == "speculative_prompt_lookup" and not set(PLAYBOOK[:-1]) <= set(summary["kept"]):
         raise ValueError("speculative lookup requires all earlier items to be kept")
-    patch_paths(proposal.patch)
-    digest = hashlib.sha256(proposal.patch.encode()).hexdigest()
-    if any(r.get("guard") == "fail" and r.get("patch_sha256") == digest for r in records):
+    validate_files(proposal.files)
+    digest = proposal_digest(proposal.files)
+    if any(r.get("guard") == "fail" and r.get("proposal_sha256") == digest for r in records):
         raise ValueError("this patch already failed guard; propose a different patch")
     if len(re.findall(r"[.!?](?:\s|$)", proposal.reasoning)) > 3:
         raise ValueError("reasoning exceeds three sentences")
@@ -209,8 +224,10 @@ def run_loop(args, remote, proposer=None) -> int:
             path.write_bytes(data)
         write_json(RESULTS / "proposals" / f"{iteration_id}.json", vars(proposal))
         kept, result, files, guard_status, note = False, None, [], "not_run", ""
+        diff = ""
         try:
-            files = apply_proposal(engine_dir, proposal.patch)
+            files = apply_proposal(engine_dir, proposal.files)
+            diff = generated_diff(before, snapshot(engine_dir))
             check(engine_dir)
             guard_status = "pass"
             checked = remote.bench(package(engine_dir), PUBLIC, 1, correctness_only=True)
@@ -237,7 +254,8 @@ def run_loop(args, remote, proposer=None) -> int:
                 restore(engine_dir, before)
             row = append_log(result, proposer="agent", item=proposal.item, hypothesis=proposal.hypothesis,
                              kept=kept, note=note, files_changed=files, guard=guard_status,
-                             patch_sha256=hashlib.sha256(proposal.patch.encode()).hexdigest())
+                             patch_sha256=hashlib.sha256(diff.encode()).hexdigest() if diff else None,
+                             proposal_sha256=proposal_digest(proposal.files), diff=diff)
             print(f"Experiment {row['id']}: {proposal.item}: {'kept' if kept else 'reverted'}; {note}")
         attended = args.attended if args.attended is not None else step < 5
         if attended:

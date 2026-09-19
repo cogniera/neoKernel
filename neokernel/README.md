@@ -41,8 +41,10 @@ race uses the same secret prompt seed for both candidates. It streams them seque
 
 The RMSNorm sweep hook is opt-in and initially staged in a temporary copy. It does not edit the starter merely by importing or installing this harness. Existing kernels can expose a literal TUNABLES dict with numeric lists in kernels/__init__.py; sweep replaces the assignment with scalar values without discarding other module content. A successful point becomes the live configuration. Preserve original ranges separately if repeated searches need them.
 
-The agent's patch is checked with git apply in a disposable directory, then scoped file changes are copied. This intentionally uses neither --3way nor branch/merge operations, keeping the user's index and commit history unchanged. On Ctrl-C, the in-flight live experiment is restored. Source snapshots are also persisted under results/snapshots/ for inspection after a hard process termination. Hard termination cannot execute Python cleanup; restore manually from that snapshot if needed.
+The agent returns a files mapping containing complete replacement contents. Omitted paths are unchanged; an empty string deletes only a kernel file. The main engine cannot be deleted. Paths are validated before writing, and Git generates the diff from before/after snapshots, including new and deleted files, for each log entry. No index or commit changes are made. On Ctrl-C, the in-flight live experiment is restored. Source snapshots are also persisted under results/snapshots/ for inspection after a hard process termination. Hard termination cannot execute Python cleanup; restore manually from that snapshot if needed.
 
 freeze requires a new output directory, public correctness checks, and a five-sample benchmark for the selected workloads. It writes engine/ and FREEZE.json only after passing. The output is for review or a later submission; freeze does not submit it.
 
 See [calibration status](../docs/CALIBRATION.md) and [design and limitations](../docs/DESIGN.md). External acceptance, calibration, and one live agent iteration remain pending.
+
+The attended Modal dollar ceiling is $3 cumulative until an agent optimization passes the judge and is kept, then $6 cumulative. Baseline measurements do not raise the ceiling. Each GPU call reserves its maximum allowed cost before dispatch.

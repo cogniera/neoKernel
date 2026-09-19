@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from .storage import RESULTS, timestamp, write_json
+from .storage import RESULTS, timestamp, write_json, read_log
 
 # Published Modal task rates checked at https://modal.com/pricing.
 GPU_RATES_USD_S = {"L4": .000222, "H100": .001097}
@@ -26,6 +26,11 @@ class SpendLedger:
         self.directory = directory
         self.path = directory / "spend.json"
 
+    def ceiling(self):
+        # A baseline marked kept is not an optimization experiment.
+        return 6.0 if any(r.get('proposer') in {'agent', 'codex'} and r.get('kept') and r.get('files_changed')
+                          and r.get('guard') == 'pass' for r in read_log(self.directory)) else STOP_USD
+
     def read(self) -> dict:
         result = json.loads(self.path.read_text()) if self.path.exists() else {"calls": []}
         setup = self.directory / "setup.json"
@@ -38,8 +43,9 @@ class SpendLedger:
         # function itself has a fixed timeout, independent of this estimate.
         reservation = estimate_usd(tier, GPU_TIMEOUT_S + 60 + GPU_IDLE_S)
         current = self.read()["estimated_usd"]
-        if current + reservation > STOP_USD:
-            raise ValueError(f"Spend stop: ${current:.4f} estimated so far; ${reservation:.4f} reservation would exceed ${STOP_USD:.2f}")
+        limit = self.ceiling()
+        if current + reservation > limit:
+            raise ValueError(f"Spend stop: ${current:.4f} estimated so far; ${reservation:.4f} reservation would exceed ${limit:.2f}")
         return reservation
 
     def record(self, tier: str, started: float, reported_s: float | None, operation: str, passed: bool) -> dict:
@@ -55,6 +61,6 @@ class SpendLedger:
         result["rates_source"] = "https://modal.com/pricing"
         write_json(self.path, result)
         print(f"Spend: {tier} estimated allocation {billed_s:.2f}s; cumulative estimated ${result['estimated_usd']:.4f}")
-        if result["estimated_usd"] >= STOP_USD:
+        if result["estimated_usd"] >= self.ceiling():
             raise ValueError(f"Spend stop: estimated cumulative cost is ${result['estimated_usd']:.4f}")
         return result

@@ -103,9 +103,10 @@ class RunResult:
         return asdict(self)
 
 
-PROPOSAL_FIELDS = ("item", "hypothesis", "expected_effect", "patch", "risk", "reasoning")
+PROPOSAL_FIELDS = ("item", "hypothesis", "expected_effect", "files", "risk", "reasoning")
 PROPOSAL_SCHEMA = {"type": "object", "properties": {k: {"type": "string"} for k in PROPOSAL_FIELDS},
                    "required": list(PROPOSAL_FIELDS), "additionalProperties": False}
+PROPOSAL_SCHEMA['properties']['files'] = {'type': 'object', 'additionalProperties': {'type': 'string'}}
 
 
 @dataclass
@@ -113,7 +114,7 @@ class Proposal:
     item: str
     hypothesis: str
     expected_effect: str
-    patch: str
+    files: dict[str, str]
     risk: str
     reasoning: str
 
@@ -121,8 +122,11 @@ class Proposal:
     def parse(cls, data: dict) -> "Proposal":
         if not isinstance(data, dict) or set(data) != set(PROPOSAL_FIELDS):
             raise ValueError("proposal must have exactly the schema fields")
-        if any(not isinstance(v, str) or not v.strip() for v in data.values()):
+        if any(not isinstance(v, str) or not v.strip() for k, v in data.items() if k != 'files'):
             raise ValueError("proposal fields must be nonempty strings")
+        if not isinstance(data['files'], dict) or not data['files'] or any(
+                not isinstance(k, str) or not isinstance(v, str) for k, v in data['files'].items()):
+            raise ValueError('files must be a nonempty mapping of paths to complete file strings')
         return cls(**data)
 
 
@@ -145,6 +149,9 @@ class LogLine:
     note: str
     engine_sha256: str | None = None
     patch_sha256: str | None = None
+    proposal_sha256: str | None = None
+    diff: str = ''
+    implemented_items: list[str] = field(default_factory=list)
 
 
 def json_schema(annotation) -> dict:

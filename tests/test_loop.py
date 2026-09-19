@@ -12,7 +12,7 @@ from neokernel.schema import Proposal
 from neokernel.storage import append_log, read_log, restore, snapshot
 
 ENGINE = b'class Engine:\n    def __init__(self, model_path): pass\n    def generate(self, input_ids, max_new_tokens):\n        yield [1]\n'
-PATCH = '--- a/engine/engine.py\n+++ b/engine/engine.py\n@@ -4 +4 @@\n-        yield [1]\n+        yield [2]\n'
+FILES = {'engine/engine.py': ENGINE.decode().replace('yield [1]', 'yield [2]')}
 
 
 class FakeRemote:
@@ -36,11 +36,11 @@ class FakeRemote:
 
 
 class FakeProposer:
-    def __init__(self, patch_text=PATCH):
-        self.patch_text = patch_text
+    def __init__(self, files=FILES):
+        self.files = files
 
     def propose(self, messages):
-        return Proposal("static_kv_cache", "test hypothesis", "2 percent", self.patch_text, "latency", "test reasoning")
+        return Proposal("static_kv_cache", "test hypothesis", "2 percent", self.files, "latency", "test reasoning")
 
 
 class LoopTests(unittest.TestCase):
@@ -58,7 +58,7 @@ class LoopTests(unittest.TestCase):
             stack.enter_context(patch("neokernel.storage.git_sha", return_value="unchanged-head"))
             args = argparse.Namespace(items=None, workloads="public", model="fake", steps=1, attended=False)
             remote = FakeRemote(score, interrupt)
-            proposer = FakeProposer(PATCH.replace("yield [2]", "eval('1')") if bad_guard else PATCH)
+            proposer = FakeProposer({'engine/engine.py': FILES['engine/engine.py'].replace('yield [2]', "eval('1')")} if bad_guard else FILES)
             if interrupt:
                 with self.assertRaises(KeyboardInterrupt):
                     run_loop(args, remote, proposer)
@@ -67,6 +67,7 @@ class LoopTests(unittest.TestCase):
             records = read_log(results)
             if score > 101 and not interrupt and not bad_guard:
                 self.assertTrue(records[-1]["kept"])
+                self.assertIn("+        yield [2]", records[-1]["diff"])
                 self.assertNotEqual(snapshot(engine), original)
             else:
                 self.assertFalse(records[-1]["kept"])

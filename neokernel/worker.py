@@ -6,6 +6,7 @@ import sys
 import time
 import traceback
 import struct
+import tempfile
 
 
 def main():
@@ -94,8 +95,8 @@ def main():
                 with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
                                                        torch.profiler.ProfilerActivity.CUDA], record_shapes=True) as prof:
                     started = time.perf_counter()
-                    next(stream)
-                    torch.cuda.synchronize()
+                    with torch.profiler.record_function('engine_decode_step'):
+                        next(stream)
                     wall_ms = (time.perf_counter() - started) * 1000
                 events = []
                 byte_estimates = {}
@@ -112,8 +113,23 @@ def main():
                             moved = 2 * (a[0]*a[1] + b[0]*b[1] + a[0]*b[1])
                             byte_estimates[name] = byte_estimates.get(name, 0) + moved
                 stream.close()
+                with tempfile.TemporaryDirectory() as trace_dir:
+                    trace_path = os.path.join(trace_dir, 'decode.json')
+                    prof.export_chrome_trace(trace_path)
+                    with open(trace_path) as trace_file:
+                        trace = json.load(trace_file)
+                traced = trace['traceEvents']
+                kernel_events = [e for e in traced if e.get('cat') == 'kernel']
+                events = [{'name': e['name'], 'start_us': e['ts'], 'end_us': e['ts']+e['dur']}
+                          for e in kernel_events]
+                region = next(e for e in traced if e.get('name') == 'engine_decode_step')
+                runtime = [e['name'] for e in traced if e.get('cat') == 'cuda_runtime'
+                           and region['ts'] <= e.get('ts', -1) <= region['ts']+region['dur']]
                 send({"kind": "profile", "step_wall_ms": wall_ms, "events": events,
-                      "byte_estimates": byte_estimates})
+                      "byte_estimates": byte_estimates, 'kernel_count': len(kernel_events),
+                      'graph_launch_count': sum('cudaGraphLaunch' in name for name in runtime),
+                      'sync_calls': [name for name in runtime if 'Synchronize' in name],
+                      'runtime_calls': runtime, 'trace': trace})
             else:
                 raise ValueError("unknown worker request")
     except BaseException as exc:
