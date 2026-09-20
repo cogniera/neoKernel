@@ -13,6 +13,7 @@ from .accounting import CPU_CORES, GPU_IDLE_S, GPU_TIMEOUT_S, MEMORY_GIB
 from .guard import extract
 from .judge import Child, evaluate, measure
 from .schema import Correctness, Workload, WorkloadResult
+from .mounts import mount_judge_source
 
 PINS = {"torch": "2.5.1", "triton": "3.1.0", "transformers": "4.51.3",
         "safetensors": "0.5.3", "tokenizers": "0.21.1"}
@@ -22,8 +23,8 @@ MODEL_PATH = "/weights/qwen3-4b"
 app = modal.App("neokernel-v1")
 image = (modal.Image.from_registry("nvidia/cuda:12.4.1-devel-ubuntu22.04", add_python="3.11")
          .pip_install(*(f"{name}=={version}" for name, version in PINS.items()),
-                      "huggingface_hub", "rich", extra_index_url="https://download.pytorch.org/whl/cu124")
-         .add_local_python_source("neokernel", ignore=["**/results/**", "**/results_backup/**", "**/__pycache__/**"]))
+                      "huggingface_hub", "rich", extra_index_url="https://download.pytorch.org/whl/cu124"))
+image = mount_judge_source(image, Path(__file__).resolve().parents[1])
 volume = modal.Volume.from_name("neokernel-weights", create_if_missing=True)
 _reference = None
 _native_cache = {}
@@ -45,7 +46,7 @@ if not modal.is_local():
     verify_runtime()
 
 
-@app.function(image=image, volumes={"/weights": volume}, cpu=1, memory=8192, timeout=900, scaledown_window=2)
+@app.function(image=image, volumes={"/weights": volume}, cpu=1, memory=8192, timeout=900, scaledown_window=2, include_source=False)
 def download_weights():
     """Explicit setup operation; generation functions never download checkpoints."""
     from huggingface_hub import snapshot_download
@@ -54,7 +55,7 @@ def download_weights():
     return {"model_path": MODEL_PATH, "revision": REVISION}
 
 
-@app.function(image=image, cpu=1, memory=2048, timeout=120, scaledown_window=2)
+@app.function(image=image, cpu=1, memory=2048, timeout=120, scaledown_window=2, include_source=False)
 def runtime_probe() -> dict:
     """Verify pinned packages and Linux subprocess startup without allocating a GPU."""
     import json
@@ -131,8 +132,19 @@ def run_one(engine_tar, workloads, samples, refresh_native=False, native=None, c
 
 
 REMOTE = dict(image=image, gpu="H100", volumes={"/weights": volume}, cpu=CPU_CORES,
-              memory=MEMORY_GIB * 1024, timeout=GPU_TIMEOUT_S, scaledown_window=GPU_IDLE_S)
+              memory=MEMORY_GIB * 1024, timeout=GPU_TIMEOUT_S, scaledown_window=GPU_IDLE_S, include_source=False)
 L4_REMOTE = dict(REMOTE, gpu="L4")
+SMOKE_REMOTE = dict(L4_REMOTE, timeout=60, startup_timeout=60, single_use_containers=True, max_containers=1)
+
+
+@app.function(**SMOKE_REMOTE)
+def check_smoke_remote(engine_tar: bytes, workloads: list, native: dict | None = None) -> dict:
+    """One public-0 sanity check, with no billed idle container after the call."""
+    if workloads != [dict(name='public-0', batch=1, S=512, N=32)]:
+        raise ValueError('Smoke check accepts only public-0')
+    result = run_one(engine_tar, workloads, 1, False, native, True)
+    result['gpu_tier'] = 'L4'
+    return result
 
 
 @app.function(**L4_REMOTE)

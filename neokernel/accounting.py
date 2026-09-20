@@ -99,11 +99,12 @@ class SpendLedger:
         self.reservation_id = None
         return result
 
-    def record(self, tier: str, started: float, reported_s: float | None, operation: str, passed: bool) -> dict:
+    def record(self, tier: str, started: float, reported_s: float | None, operation: str, passed: bool,
+               *, idle_s=GPU_IDLE_S, timeout_s=GPU_TIMEOUT_S) -> dict:
         wall_s = time.perf_counter() - started
-        billed_s = max(wall_s, reported_s or 0) + GPU_IDLE_S
+        billed_s = max(wall_s, reported_s or 0) + idle_s
         if reported_s is None:
-            billed_s = max(billed_s, GPU_TIMEOUT_S + 60 + GPU_IDLE_S)
+            billed_s = max(billed_s, timeout_s + 60 + idle_s)
         if not getattr(self, 'reservation_id', None):
             self.reserve(tier)
         result = self.settle(estimate_usd(tier, billed_s), operation=operation, tier=tier,

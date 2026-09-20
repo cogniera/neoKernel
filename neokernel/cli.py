@@ -13,7 +13,7 @@ from pathlib import Path
 
 from agent.package import package
 from .guard import GuardError, check
-from .accounting import GPU_TIMEOUT_S, SpendLedger, SpendLimit, record_stop
+from .accounting import GPU_TIMEOUT_S, SpendLedger, SpendLimit, record_stop, estimate_usd
 from .calibration import equivalent_estimates, load_calibration, refresh_host_factors
 from .schema import PUBLIC, select_workloads
 from .storage import ROOT, RESULTS, Budget, append_log, git_sha, read_log, save_run, seed_native, write_json
@@ -104,10 +104,11 @@ def gauge(result: dict, width=70):
 
 class Remote:
     """One Modal app context can serve the complete sweep or agent session."""
-    def __init__(self, budget: Budget | None = None):
+    def __init__(self, budget: Budget | None = None, *, smoke_check=False):
         self.budget = budget
         self.native = seed_native()
         self.spend = SpendLedger()
+        self.smoke_check = smoke_check
 
     def __enter__(self):
         try:
@@ -131,28 +132,37 @@ class Remote:
             self.budget.charge(seconds)
 
     def bench(self, payload, workloads, samples=3, correctness_only=False, refresh_native=False, transport=None):
-        self.reserve(GPU_TIMEOUT_S)
+        smoke = self.smoke_check and correctness_only
+        if smoke and list(workloads) != [PUBLIC[0]]:
+            raise ValueError('Smoke check accepts only public-0')
+        timeout_s = 60 if smoke else GPU_TIMEOUT_S
+        self.reserve(timeout_s)
         tier = "L4" if correctness_only else "H100"
-        self.spend.reserve(tier)
+        record_options = {'idle_s': 0, 'timeout_s': 60} if smoke else {}
+        if smoke:
+            self.spend.reserve_amount('L4', estimate_usd('L4', 120), 'bounded public-0 check')
+        else:
+            self.spend.reserve(tier)
         started = time.perf_counter()
         try:
             if correctness_only:
-                result = self.api.check_remote.remote(payload, [asdict(w) for w in workloads], self.native)
+                endpoint = self.api.check_smoke_remote if smoke else self.api.check_remote
+                result = endpoint.remote(payload, [asdict(w) for w in workloads], self.native)
             else:
                 result = self.api.judge_remote.remote(payload, [asdict(w) for w in workloads], samples,
                                                       refresh_native, self.native, False,
                                                       transport=transport or (load_calibration() or {}).get("transport", "json"))
         except BaseException:
-            self.charge(GPU_TIMEOUT_S)
+            self.charge(timeout_s)
             try:
-                self.spend.record(tier, started, None, "check" if correctness_only else "bench", False)
+                self.spend.record(tier, started, None, "check" if correctness_only else "bench", False, **record_options)
             except SpendLimit:
                 pass  # Preserve the original harness failure and its traceback.
             raise
         self.native = result["native"]
         self.charge(result["gpu_seconds"])
         save_run(result, payload)
-        self.spend.record(tier, started, result["gpu_seconds"], "check" if correctness_only else "bench", result["eligible"])
+        self.spend.record(tier, started, result["gpu_seconds"], "check" if correctness_only else "bench", result["eligible"], **record_options)
         if not correctness_only:
             refresh_host_factors(result)
         return result
@@ -324,7 +334,7 @@ def main(argv=None) -> int:
                         raise
         workloads = select_workloads(getattr(args, "workloads", "public"))
         payload = package(ROOT / "engine")
-        with Remote() as remote:
+        with Remote(smoke_check=args.command == 'check' and workloads == [PUBLIC[0]]) as remote:
             if args.command == "download-weights":
                 print(remote.api.download_weights.remote())
                 return 0
