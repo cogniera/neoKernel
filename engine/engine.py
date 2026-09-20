@@ -1,6 +1,7 @@
 """Causal native prefill and a hand-rolled, fixed-buffer Qwen3 decode graph."""
 
 import torch
+import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, StaticCache
 from kernels import CONFIG, TUNABLES
 
@@ -32,17 +33,60 @@ class PrefixStaticCache(StaticCache):
         return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
 
+def _rotate_half(x):
+    half = x.shape[-1] // 2
+    return torch.cat((-x[..., half:], x[..., :half]), dim=-1)
+
+
+def _repeat_kv(hidden_states, n_rep):
+    batch, kv_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, kv_heads, n_rep, slen, head_dim)
+    return hidden_states.reshape(batch, kv_heads * n_rep, slen, head_dim)
+
+
 @torch.inference_mode()
-def qwen_forward(model, input_ids, cache, cache_position, position_ids, attention_mask):
+def qwen_forward(model, input_ids, cache, cache_position, position_ids, attention_mask, packed_layers):
     base = model.model
     x = base.embed_tokens(input_ids)
     position_embeddings = base.rotary_emb(x, position_ids)
-    for layer in base.layers:
-        x = layer(
-            x, attention_mask=attention_mask, position_ids=position_ids,
-            past_key_value=cache, use_cache=True, cache_position=cache_position,
-            position_embeddings=position_embeddings,
-        )[0]
+    cos = position_embeddings[0].unsqueeze(1)
+    sin = position_embeddings[1].unsqueeze(1)
+    num_heads = model.config.num_attention_heads
+    num_kv_heads = model.config.num_key_value_heads
+    head_dim = base.layers[0].self_attn.head_dim
+    q_width = num_heads * head_dim
+    kv_width = num_kv_heads * head_dim
+    for layer_idx, layer in enumerate(base.layers):
+        attn = layer.self_attn
+        residual = x
+        x = layer.input_layernorm(x)
+        bsz, seq_len = x.shape[0], x.shape[1]
+        packed = torch.mm(x.reshape(-1, x.shape[-1]), packed_layers[layer_idx].qkv)
+        packed = packed.view(bsz, seq_len, -1)
+        q = packed[..., :q_width].view(bsz, seq_len, num_heads, head_dim)
+        k = packed[..., q_width:q_width + kv_width].view(bsz, seq_len, num_kv_heads, head_dim)
+        v = packed[..., q_width + kv_width:q_width + 2 * kv_width].view(bsz, seq_len, num_kv_heads, head_dim)
+        q = attn.q_norm(q).transpose(1, 2)
+        k = attn.k_norm(k).transpose(1, 2)
+        v = v.transpose(1, 2)
+        q = (q * cos) + (_rotate_half(q) * sin)
+        k = (k * cos) + (_rotate_half(k) * sin)
+        k, v = cache.update(k, v, layer_idx)
+        k = _repeat_kv(k, num_heads // num_kv_heads)
+        v = _repeat_kv(v, num_heads // num_kv_heads)
+        attn_out = F.scaled_dot_product_attention(q, k, v, attn_mask=None, is_causal=True,
+                                                  scale=attn.scaling)
+        attn_out = attn_out.transpose(1, 2).contiguous().reshape(bsz, seq_len, -1)
+        x = residual + attn.o_proj(attn_out)
+        residual = x
+        x = layer.post_attention_layernorm(x)
+        gate_up = torch.mm(x.reshape(-1, x.shape[-1]), packed_layers[layer_idx].gate_up)
+        gate_up = gate_up.view(bsz, seq_len, -1)
+        width = layer.mlp.gate_proj.out_features
+        act = F.silu(gate_up[..., :width]) * gate_up[..., width:]
+        x = residual + layer.mlp.down_proj(act)
     # RMSNorm is independent across tokens; only the final logits are used.
     x = base.norm(x[:, -1:, :])
     return model.lm_head(x)
@@ -133,7 +177,7 @@ class Engine:
 
     def prefill(self):
         logits = qwen_forward(self.model, self.prompt_ids, self.cache, self.prefill_positions,
-                              self.prefill_positions.unsqueeze(0), None)
+                              self.prefill_positions.unsqueeze(0), None, self.layers)
         self.token_ids.copy_(logits[:, -1, :].argmax(dim=-1, keepdim=True))
 
     def capture_prefill(self):
