@@ -19,9 +19,9 @@ from .transaction import Transaction, crash
 from .accounting import SpendLedger, SpendLimit
 from .judge import keep_decision
 
-PLAYBOOK = ["static_kv_cache", "bypass_wrapper", "cuda_graph_decode", "concat_qkv", "concat_gate_up",
-            "prefill_cuda_graph", "fused_rmsnorm", "fused_qk_norm_rope_kv_write", "fused_silu_mul",
-            "lm_head_argmax", "decode_attention_kernel", "speculative_prompt_lookup"]
+KEPT_ITEMS = {'static_kv_cache', 'bypass_wrapper', 'cuda_graph_decode', 'concat_qkv', 'concat_gate_up',
+              'fused_rmsnorm', 'fused_qk_norm_rope_kv_write', 'fused_silu_mul', 'decode_attention_kernel'}
+PLAYBOOK = ['attention_impl_kv_layout', 'lm_head_argmax', 'prefill_packed_weights', 'prefill_cuda_graph']
 
 
 def allowed_path(name: str) -> bool:
@@ -94,7 +94,7 @@ def generated_diff(before: dict, after: dict) -> str:
 def history_summary(records: list[dict]) -> dict:
     tried = Counter(r["item"] for r in records if r.get("proposer") == "agent")
     reverted = Counter(r["item"] for r in records if r.get("proposer") == "agent" and not r.get("kept"))
-    kept = sorted({item for r in records if r.get('kept') for item in [r['item'], *r.get('implemented_items', [])]})
+    kept = sorted(KEPT_ITEMS | {item for r in records if r.get('kept') for item in [r['item'], *r.get('implemented_items', [])]})
     return {"attempts": dict(tried), "reverts": dict(reverted), "kept": kept,
             "coverage": [item for item in PLAYBOOK if not tried[item]]}
 
@@ -210,8 +210,6 @@ def validate_proposal(proposal: Proposal, items: list[str], records: list[dict])
     summary = history_summary(records)
     if summary["reverts"].get(proposal.item, 0) >= 5:
         raise ValueError("move-on rule: this item already has five reverts")
-    if proposal.item == "speculative_prompt_lookup" and not set(PLAYBOOK[:-1]) <= set(summary["kept"]):
-        raise ValueError("speculative lookup requires all earlier items to be kept")
     validate_files(proposal.files)
     digest = proposal_digest(proposal.files)
     if any(r.get("guard") == "fail" and r.get("proposal_sha256") == digest for r in records):

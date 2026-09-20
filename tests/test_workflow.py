@@ -19,6 +19,16 @@ from neokernel.accounting import SpendLedger, estimate_usd, GPU_IDLE_S
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_post_hand_rolled_program_matches_playbook(self):
+        from neokernel.loop import PLAYBOOK, KEPT_ITEMS
+        program = (Path(__file__).resolve().parents[1] / 'neokernel/program.md').read_text(encoding='utf-8')
+        self.assertEqual(PLAYBOOK, ['attention_impl_kv_layout', 'lm_head_argmax', 'prefill_packed_weights', 'prefill_cuda_graph'])
+        self.assertEqual(len(KEPT_ITEMS), 9)
+        for item in KEPT_ITEMS | set(PLAYBOOK):
+            self.assertIn('**' + item + '**', program)
+        for text in ['After five reverted attempts', '## Whole-file proposal format', 'Never move a cast', 'No quantization', '670.7', '2.125']:
+            self.assertIn(text, program)
+
     def test_incremental_task_budget_preserves_reservation_stop(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
@@ -176,9 +186,9 @@ class WorkflowTests(unittest.TestCase):
             budget.reserve(3600)
 
     def test_move_on(self):
-        self.assertEqual(history_summary([{'item': 'cuda_graph_decode', 'proposer': 'codex', 'kept': True,
-                                          'implemented_items': ['static_kv_cache', 'bypass_wrapper']}])['kept'],
-                         ['bypass_wrapper', 'cuda_graph_decode', 'static_kv_cache'])
+        self.assertTrue({'bypass_wrapper', 'cuda_graph_decode', 'static_kv_cache'} <= set(history_summary(
+            [{'item': 'cuda_graph_decode', 'proposer': 'codex', 'kept': True,
+              'implemented_items': ['static_kv_cache', 'bypass_wrapper']}])['kept']))
         records = [{"item": "static_kv_cache", "proposer": "agent", "kept": False}]*5
         self.assertEqual(history_summary(records)["reverts"]["static_kv_cache"], 5)
         proposal = Proposal("static_kv_cache", "faster", "1%", {"engine/engine.py": "content"}, "latency", "one sentence")
