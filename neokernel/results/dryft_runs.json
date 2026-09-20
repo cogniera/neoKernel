@@ -128,6 +128,45 @@
       "full_run_id": "1bf05baa-3cb4-452c-ad56-4c30f43c82d9",
       "commit": "012646d",
       "status": "succeeded"
+    },
+    {
+      "run_id": "98599990",
+      "label": "attention_splitk on trial 39 (grouped split-K decode attention)",
+      "score": 740.3,
+      "rank": 45,
+      "source": "Run page text supplied by the user in chat on 2026-09-20 UTC.",
+      "note": "Official run 12; commit 48fa90b; team best at capture.",
+      "workloads": {
+        "public-0": {
+          "ttft_ms": 19.69,
+          "tpot_ms": 4.61,
+          "tps": 196.9,
+          "batch_time_ms": 162.55,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 10.2
+        },
+        "public-1": {
+          "ttft_ms": 201.27,
+          "tpot_ms": 5.25,
+          "tps": 351.7,
+          "batch_time_ms": 363.91,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 11.9
+        },
+        "public-2": {
+          "ttft_ms": 190.17,
+          "tpot_ms": 5.27,
+          "tps": 2382.7,
+          "batch_time_ms": 859.55,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 12.65
+        }
+      },
+      "commit": "48fa90b",
+      "status": "succeeded"
     }
   ]
 }

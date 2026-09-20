@@ -90,6 +90,10 @@ class Engine:
         self.position_ids = self.cache_position.view(1, 1)
         self.flat_token_ids = self.token_ids.view(batch)
         self.next_tokens = torch.empty_like(self.token_ids)
+        # Two pinned landing buffers and two streams: step t+1 is queued on the
+        # GPU before the host waits for token t, so the yield never idles the GPU.
+        self.host_tokens = [torch.empty((batch, 1), dtype=torch.int64, pin_memory=True) for _ in range(2)]
+        self.copy_streams = [torch.cuda.Stream() for _ in range(2)]
         self.buffers = self.buffer_type(batch, capacity, "cuda:0", DECODE_CONFIG)
         self.logits = torch.empty((batch, self.model.config.vocab_size),
                                   device="cuda:0", dtype=torch.bfloat16)
@@ -129,6 +133,10 @@ class Engine:
         self.graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.graph, stream=stream):
             self.next_tokens = self.decode()
+            # One replay is a complete step: it consumes token_ids at the
+            # current position and leaves the next token and position in place.
+            self.token_ids.copy_(self.next_tokens)
+            self.cache_position.add_(1)
         torch.cuda.current_stream().wait_stream(stream)
 
     def prefill(self):
@@ -148,6 +156,18 @@ class Engine:
             self.prefill()
         torch.cuda.current_stream().wait_stream(stream)
 
+    def fetch(self, slot):
+        """Queue an async copy of the current token_ids; the next step waits for it on the device."""
+        stream = self.copy_streams[slot]
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            self.host_tokens[slot].copy_(self.token_ids, non_blocking=True)
+        torch.cuda.current_stream().wait_stream(stream)
+
+    def emit(self, slot):
+        self.copy_streams[slot].synchronize()
+        return self.host_tokens[slot][:, 0].tolist()
+
     def generate(self, input_ids, max_new_tokens):
         if max_new_tokens <= 0:
             return
@@ -166,9 +186,9 @@ class Engine:
             self.cache.prefill_length = 0
             if max_new_tokens > 1 and self.graph is None:
                 self.capture_decode()
-            yield self.token_ids[:, 0].tolist()
-            for _ in range(max_new_tokens - 1):
+            self.fetch(0)
+            for step in range(1, max_new_tokens):
                 self.graph.replay()
-                self.token_ids.copy_(self.next_tokens)
-                self.cache_position.add_(1)
-                yield self.token_ids[:, 0].tolist()
+                self.fetch(step % 2)
+                yield self.emit((step - 1) % 2)
+            yield self.emit((max_new_tokens - 1) % 2)
