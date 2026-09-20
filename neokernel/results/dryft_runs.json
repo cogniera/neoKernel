@@ -206,6 +206,44 @@
       },
       "commit": "3ae5b52",
       "status": "succeeded"
+    },
+    {
+      "run_id": "f8fc937e",
+      "commit": "0694a14",
+      "label": "four-token prefix-lookup speculation",
+      "score": 766.7,
+      "status": "succeeded",
+      "source": "Run page text supplied by the user in chat on 2026-09-20.",
+      "note": "Submission 17; attempt 2 of 3; eligible score, team best remains 779.2. The same page contains a harness_error entry despite its final succeeded status. No candidate error reported.",
+      "workloads": {
+        "public-0": {
+          "tps": 199.7,
+          "batch_time_ms": 160.28,
+          "ttft_ms": 19.19,
+          "tpot_ms": 4.55,
+          "memory_gib": 10.21,
+          "result": "passed",
+          "latency": "pass"
+        },
+        "public-1": {
+          "tps": 356.8,
+          "batch_time_ms": 358.69,
+          "ttft_ms": 200.12,
+          "tpot_ms": 5.11,
+          "memory_gib": 11.91,
+          "result": "passed",
+          "latency": "pass"
+        },
+        "public-2": {
+          "tps": 2389.9,
+          "batch_time_ms": 856.93,
+          "ttft_ms": 190.03,
+          "tpot_ms": 5.25,
+          "memory_gib": 12.89,
+          "result": "passed",
+          "latency": "pass"
+        }
+      }
     }
   ]
 }

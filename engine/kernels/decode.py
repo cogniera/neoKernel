@@ -10,16 +10,12 @@ from kernels.weights import LayerWeights
 
 
 class DecodeBuffers:
-    def __init__(self, batch, capacity, device, config=None, tokens=1):
+    def __init__(self, batch, capacity, device, config=None):
         self.config = dict(CONFIG if config is None else config)
-        self.tokens = tokens
-        batch = batch * tokens
         if self.config['attention_impl'] not in ('triton', 'sdpa_grouped'):
             raise ValueError('invalid attention_impl')
         if self.config['kv_layout'] not in ('bhsd', 'bshd'):
             raise ValueError('invalid kv_layout')
-        if tokens > 1 and self.config['attention_impl'] != 'triton':
-            raise ValueError('Multi-token verification requires causal Triton attention')
         def alloc(*shape):
             return torch.empty(shape, device=device, dtype=torch.bfloat16)
         self.mm = skinny_mm if self.config.get('skinny_gemm', True) else (lambda a, b, out: torch.mm(a, b, out=out))
@@ -54,9 +50,9 @@ class DecodeBuffers:
             norm_out(self.x, w.input_norm, self.norm, w.eps)
         self.mm(self.norm, w.qkv, self.qkv)
         qk_rope_cache_out(self.qkv, w.q_norm, w.k_norm, cos, sin, position,
-                          self.q, k, v, self.qk_scratch, self.config['fuse_qk_norm_rope'], self.tokens)
+                          self.q, k, v, self.qk_scratch, self.config['fuse_qk_norm_rope'])
         if self.config['attention_impl'] == 'triton':
-            attention_out(self.q, k, v, position, self.attn, self.partial, self.lse, self.tokens)
+            attention_out(self.q, k, v, position, self.attn, self.partial, self.lse)
         else:
             # Four query rows per KV head; all four use the same visible prefix.
             # SDPA's output/workspace is owned by the CUDA graph's private pool.

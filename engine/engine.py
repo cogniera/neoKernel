@@ -1,14 +1,15 @@
 """Causal native prefill and a hand-rolled, fixed-buffer Qwen3 decode graph."""
 
 import torch
-from collections import deque
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
+from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb
 from transformers import AutoModelForCausalLM, StaticCache
 from kernels import CONFIG, TUNABLES
 
 
 # Configuration is fixed for the lifetime of an imported engine.
 DECODE_CONFIG = dict(CONFIG)
-SPECULATIVE = True
 
 
 class PrefixStaticCache(StaticCache):
@@ -38,19 +39,39 @@ class PrefixStaticCache(StaticCache):
 def qwen_forward(model, input_ids, cache, cache_position, position_ids, attention_mask):
     base = model.model
     x = base.embed_tokens(input_ids)
-    position_embeddings = base.rotary_emb(x, position_ids)
-    for layer in base.layers:
-        x = layer(
-            x, attention_mask=attention_mask, position_ids=position_ids,
-            past_key_value=cache, use_cache=True, cache_position=cache_position,
-            position_embeddings=position_embeddings,
-        )[0]
+    cos, sin = base.rotary_emb(x, position_ids)
+    batch, length = input_ids.shape
+    # Keep the native projection and BF16 rounding boundaries. Only attention
+    # dispatch changes: FlashAttention consumes eight KV heads directly instead
+    # of materializing repeat_kv's 32-head copies at every layer.
+    with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        for layer_idx, layer in enumerate(base.layers):
+            residual = x
+            normalized = layer.input_layernorm(x)
+            attn = layer.self_attn
+            head_shape = (batch, length, -1, attn.head_dim)
+            q = attn.q_norm(attn.q_proj(normalized).view(head_shape)).transpose(1, 2)
+            k = attn.k_norm(attn.k_proj(normalized).view(head_shape)).transpose(1, 2)
+            v = attn.v_proj(normalized).view(head_shape).transpose(1, 2)
+            q, k = apply_rotary_pos_emb(q, k, cos, sin)
+            k, v = cache.update(k, v, layer_idx, {
+                "sin": sin, "cos": cos, "cache_position": cache_position,
+            })
+            attended = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=attention_mask, dropout_p=0.0,
+                is_causal=attention_mask is None and length > 1,
+                scale=attn.scaling, enable_gqa=True,
+            )
+            attended = attended.transpose(1, 2).contiguous().view(batch, length, -1)
+            x = residual + attn.o_proj(attended)
+            residual = x
+            x = residual + layer.mlp(layer.post_attention_layernorm(x))
     # RMSNorm is independent across tokens; only the final logits are used.
     x = base.norm(x[:, -1:, :])
     return model.lm_head(x)
 
 
-class GreedyEngine:
+class Engine:
     def __init__(self, model_path):
         # Lazy device imports allow the native-prefill CPU regression to run on
         # hosts without Triton. These execute during loading, never in a step.
@@ -194,127 +215,3 @@ class GreedyEngine:
                 self.fetch(step % 2)
                 yield self.emit((step - 1) % 2)
             yield self.emit((max_new_tokens - 1) % 2)
-
-
-class Engine(GreedyEngine):
-    """Verify a short prompt-derived continuation with the full target model.
-
-Each sequence advances independently. Rejected cache entries are overwritten
-on the next pass and are excluded by absolute-position causal attention.
-"""
-
-    def prepare(self, batch, prompt_length, output_length):
-        if DECODE_CONFIG['attention_impl'] != 'triton':
-            super().prepare(batch, prompt_length, output_length)
-            return
-        from kernels.speculative import draft_out, accept_out
-        self.draft_out = draft_out
-        self.accept_out = accept_out
-        self.draft_width = 4
-        super().prepare(batch, prompt_length, output_length + self.draft_width)
-        self.shape = (batch, prompt_length, output_length)
-        capacity = prompt_length + output_length + self.draft_width
-        self.history = torch.zeros((batch, capacity), device='cuda:0', dtype=torch.int64)
-        self.base = torch.full((batch,), prompt_length, device='cuda:0', dtype=torch.int64)
-        self.end_position = prompt_length + output_length - 1
-        self.packet = torch.empty((batch, self.draft_width + 1), device='cuda:0', dtype=torch.int64)
-        self.host_packet = torch.empty(self.packet.shape, dtype=torch.int64, pin_memory=True)
-        self.verify_inputs = {}
-        self.verify_predictions = {}
-        self.verify_buffers = {1: self.buffers}
-        self.verify_logits = {1: self.logits}
-        self.verify_graphs = {}
-        for width in (1, self.draft_width):
-            self.verify_inputs[width] = torch.empty((batch, width), device='cuda:0', dtype=torch.int64)
-            self.verify_predictions[width] = torch.empty((batch, width), device='cuda:0', dtype=torch.int64)
-            if width > 1:
-                config = dict(DECODE_CONFIG)
-                config['skinny_gemm'] = False
-                self.verify_buffers[width] = self.buffer_type(batch, capacity, 'cuda:0', config, tokens=width)
-                self.verify_logits[width] = torch.empty((batch * width, self.model.config.vocab_size),
-                                                       device='cuda:0', dtype=torch.bfloat16)
-
-    def verify(self, width):
-        inputs = self.verify_inputs[width]
-        buffers = self.verify_buffers[width]
-        logits = self.verify_logits[width]
-        self.draft_out(self.history, self.base, inputs)
-        torch.index_select(self.embedding, 0, inputs.view(-1), out=buffers.x)
-        fuse = DECODE_CONFIG['fuse_norm_residual']
-        for i, weights in enumerate(self.layers):
-            buffers.layer(weights, self.cache.key_cache[i], self.cache.value_cache[i],
-                          self.base, self.cos, self.sin, self.decode_mask,
-                          carry_in=fuse and i > 0, defer_out=fuse)
-        if fuse:
-            self.norm_out(buffers.branch, self.final_norm, buffers.norm, self.final_eps,
-                          buffers.x, buffers.x)
-        else:
-            self.norm_out(buffers.x, self.final_norm, buffers.norm, self.final_eps)
-        torch.mm(buffers.norm, self.lm_head, out=logits)
-        predictions = self.verify_predictions[width]
-        torch.argmax(logits, dim=-1, out=predictions.view(-1))
-        self.accept_out(inputs, predictions, self.history, self.base, self.packet, self.end_position)
-
-    def capture_verifiers(self):
-        stream = torch.cuda.Stream()
-        stream.wait_stream(torch.cuda.current_stream())
-        for width in (1, self.draft_width):
-            with torch.cuda.stream(stream):
-                for _ in range(3):
-                    self.verify(width)
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph, stream=stream):
-                self.verify(width)
-            self.verify_graphs[width] = graph
-        torch.cuda.current_stream().wait_stream(stream)
-
-    def reset_history(self, prompt_length):
-        self.base.fill_(prompt_length)
-        self.history.zero_()
-        self.history[:, :prompt_length].copy_(self.prompt_ids)
-        self.history[:, prompt_length:prompt_length + 1].copy_(self.token_ids)
-
-    def generate(self, input_ids, max_new_tokens):
-        if DECODE_CONFIG['attention_impl'] != 'triton':
-            yield from super().generate(input_ids, max_new_tokens)
-            return
-        if max_new_tokens <= 0:
-            return
-        batch, prompt_length = len(input_ids), len(input_ids[0])
-        with torch.inference_mode():
-            if self.shape != (batch, prompt_length, max_new_tokens):
-                self.prepare(batch, prompt_length, max_new_tokens)
-            self.prompt_ids.copy_(torch.tensor(input_ids, device='cuda:0', dtype=torch.int64))
-            self.cache.prefill_length = prompt_length
-            if self.prefill_graph is None:
-                self.capture_prefill()
-            self.prefill_graph.replay()
-            self.cache.prefill_length = 0
-            self.reset_history(prompt_length)
-            if max_new_tokens > 1 and not self.verify_graphs:
-                self.capture_verifiers()
-                self.reset_history(prompt_length)
-            # Emit prefill immediately; speculative work never delays first token.
-            yield self.token_ids[:, 0].tolist()
-            queues = [deque() for _ in range(batch)]
-            cooldown = 0
-            for step in range(1, max_new_tokens):
-                while any(not queue for queue in queues):
-                    width = 1 if cooldown or max_new_tokens - step < self.draft_width else self.draft_width
-                    self.verify_graphs[width].replay()
-                    self.host_packet.copy_(self.packet, non_blocking=True)
-                    torch.cuda.current_stream().synchronize()
-                    packets = self.host_packet.tolist()
-                    active, produced = 0, 0
-                    for sequence, values in enumerate(packets):
-                        count = values[0]
-                        queues[sequence].extend(values[1:count + 1])
-                        if count:
-                            active += 1
-                            produced += count
-                    if width > 1:
-                        threshold = 2.0 if batch >= 8 else 1.5
-                        cooldown = 8 if produced < active * threshold else 0
-                    elif cooldown:
-                        cooldown -= 1
-                yield [queue.popleft() for queue in queues]
