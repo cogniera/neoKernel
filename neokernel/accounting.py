@@ -22,6 +22,10 @@ class SpendLimit(ValueError):
     """A normal, clean search stop; never a candidate or harness failure."""
 
 
+def record_stop(exc, directory=RESULTS):
+    write_json(directory / 'STOP.json', {'reason': 'spend ceiling', 'message': str(exc), 'ts': timestamp()})
+
+
 def start_night(directory=RESULTS):
     path = directory / 'night_budget.json'
     if not path.exists():

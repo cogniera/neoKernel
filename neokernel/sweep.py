@@ -121,7 +121,7 @@ def numeric_candidates(source, limit, randomized=False, seed=0):
 def run_sweep(args, remote) -> int:
     from .loop import measured_baseline, run_experiment, generated_diff
     from .transaction import Transaction, crash
-    from .accounting import SpendLimit
+    from .accounting import SpendLimit, record_stop
     from .storage import RESULTS
     transaction = Transaction(ROOT, RESULTS)
     transaction.startup(getattr(args, 'resume', False))
@@ -149,6 +149,7 @@ def run_sweep(args, remote) -> int:
         print(f"Sweep finished: best={baseline['geomean_tps']:.2f} tok/s", flush=True)
         return 0
     except SpendLimit as exc:
+        record_stop(exc, RESULTS)
         if transaction.state:
             before = snapshot(RESULTS / 'snapshots' / str(transaction.state['id']) / 'before')
             transaction.finish(transaction.row(None, False, None, 'not_run', str(exc), generated_diff(before, snapshot(live))))

@@ -114,6 +114,7 @@ class LoopTests(unittest.TestCase):
                 self.assertEqual(len(read_log(root/'results')), 1 if ceiling else 2)
                 self.assertEqual(git(root, 'branch', '--show-current'), 'main')
                 self.assertFalse((root/'results/CRASH.txt').exists())
+                self.assertEqual((root/'results/STOP.json').exists(), ceiling)
 
     def test_sweep_threshold_and_numeric_coordinates(self):
         from neokernel import sweep, storage

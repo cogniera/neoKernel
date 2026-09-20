@@ -13,7 +13,7 @@ from pathlib import Path
 
 from agent.package import package
 from .guard import GuardError, check
-from .accounting import GPU_TIMEOUT_S, SpendLedger, SpendLimit
+from .accounting import GPU_TIMEOUT_S, SpendLedger, SpendLimit, record_stop
 from .calibration import equivalent_estimates, load_calibration, refresh_host_factors
 from .schema import PUBLIC, select_workloads
 from .storage import ROOT, RESULTS, Budget, append_log, git_sha, read_log, save_run, seed_native, write_json
@@ -316,6 +316,7 @@ def main(argv=None) -> int:
                         with Remote(Budget(args.max_gpu_minutes)) as remote:
                             return run_loop(args, remote) if args.command == 'auto' else run_sweep(args, remote)
                     except SpendLimit as exc:
+                        record_stop(exc)
                         print(str(exc), flush=True)
                         return 0
                     except BaseException:

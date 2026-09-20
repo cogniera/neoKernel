@@ -23,7 +23,7 @@ app = modal.App("neokernel-v1")
 image = (modal.Image.from_registry("nvidia/cuda:12.4.1-devel-ubuntu22.04", add_python="3.11")
          .pip_install(*(f"{name}=={version}" for name, version in PINS.items()),
                       "huggingface_hub", "rich", extra_index_url="https://download.pytorch.org/whl/cu124")
-         .add_local_python_source("neokernel", ignore=["**/results/**", "**/__pycache__/**"]))
+         .add_local_python_source("neokernel", ignore=["**/results/**", "**/results_backup/**", "**/__pycache__/**"]))
 volume = modal.Volume.from_name("neokernel-weights", create_if_missing=True)
 _reference = None
 _native_cache = {}

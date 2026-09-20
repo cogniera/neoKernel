@@ -49,7 +49,9 @@ def hourly(directory=RESULTS):
                      f"spend=${ledger['estimated_usd'] - night['start_estimated_usd']:.4f}\n")
 
 
-def morning(directory=RESULTS, outcome='finished'):
+def morning(directory=RESULTS, outcome=None):
+    if outcome is None:
+        outcome = 'harness crash' if (directory / 'CRASH.txt').exists() else 'spend ceiling' if (directory / 'STOP.json').exists() else 'command completed'
     night, rows, ledger, best = status(directory)
     totals = {}
     for call in ledger['calls']:

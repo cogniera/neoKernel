@@ -16,7 +16,7 @@ from .guard import GuardError, check
 from .schema import PUBLIC, Proposal, PROPOSAL_SCHEMA, select_workloads
 from .storage import ROOT, RESULTS, append_log, read_log, restore, snapshot, write_json
 from .transaction import Transaction, crash
-from .accounting import SpendLedger, SpendLimit
+from .accounting import SpendLedger, SpendLimit, record_stop
 from .judge import keep_decision
 
 KEPT_ITEMS = {'static_kv_cache', 'bypass_wrapper', 'cuda_graph_decode', 'concat_qkv', 'concat_gate_up',
@@ -299,6 +299,7 @@ def run_loop(args, remote, proposer=None) -> int:
             baseline = run_experiment(transaction, remote, baseline, workloads, proposal.files, proposal=proposal)
         return 0
     except SpendLimit as exc:
+        record_stop(exc, RESULTS)
         if transaction.state:
             before = snapshot(RESULTS / 'snapshots' / str(transaction.state['id']) / 'before')
             row = transaction.row(None, False, None, 'not_run', str(exc), generated_diff(before, snapshot(engine_dir)))
