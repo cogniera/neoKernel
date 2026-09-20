@@ -1,7 +1,10 @@
-"""Loaded weight views and reusable scratch for a hand-rolled Qwen3 layer."""
+"""Loaded weight views and reusable scratch for a hand-rolled Qwen3 layer.
+
+Every buffer holds batch * tree.nodes rows: row b*T+j is draft-tree node j of
+sequence b. With a one-node tree this is ordinary single-token decode.
+"""
 
 import torch
-import torch.nn.functional as F
 from kernels import CONFIG, TUNABLES
 from kernels.elementwise import norm_out, qk_rope_cache_out, silu_mul_out
 from kernels.attention import attention_out
@@ -10,36 +13,41 @@ from kernels.weights import LayerWeights
 
 
 class DecodeBuffers:
-    def __init__(self, batch, capacity, device, config=None):
+    def __init__(self, batch, capacity, device, config=None, tree=None, scratch=True):
+        from kernels.tree import DraftTree
         self.config = dict(CONFIG if config is None else config)
-        if self.config['attention_impl'] not in ('triton', 'sdpa_grouped'):
+        if self.config['attention_impl'] != 'triton':
             raise ValueError('invalid attention_impl')
         if self.config['kv_layout'] not in ('bhsd', 'bshd'):
             raise ValueError('invalid kv_layout')
+        self.tree = DraftTree(1, 1, device) if tree is None else tree
+        rows = batch * self.tree.nodes
+        self.rows = rows
         def alloc(*shape):
             return torch.empty(shape, device=device, dtype=torch.bfloat16)
-        self.mm = skinny_mm if self.config.get('skinny_gemm', True) else (lambda a, b, out: torch.mm(a, b, out=out))
-        self.x = alloc(batch, 2560)
-        self.norm = alloc(batch, 2560)
-        self.branch = alloc(batch, 2560)
-        self.qkv = alloc(batch, 6144)
-        self.qk_scratch = alloc(batch, 6144)
-        self.q = alloc(batch, 32, 128)
-        self.attn = alloc(batch, 32, 128)
-        self.attn_flat = self.attn.view(batch, 4096)
-        self.attn_grouped = self.attn.view(batch, 8, 4, 128)
-        self.q_grouped = self.q.view(batch, 8, 4, 128)
-        self.gate_up = alloc(batch, 19456)
-        self.product = alloc(batch, 9728)
-        self.activation = alloc(batch, 9728)
+        self.mm = skinny_mm if self.config.get('skinny_gemm', False) else (lambda a, b, out: torch.mm(a, b, out=out))
+        self.x = alloc(rows, 2560)
+        self.norm = alloc(rows, 2560)
+        self.branch = alloc(rows, 2560)
+        self.qkv = alloc(rows, 6144)
+        self.qk_scratch = alloc(rows, 6144)
+        self.q = alloc(rows, 32, 128)
+        self.attn = alloc(rows, 32, 128)
+        self.attn_flat = self.attn.view(rows, 4096)
+        self.gate_up = alloc(rows, 19456)
+        self.product = alloc(rows, 9728)
+        self.activation = alloc(rows, 9728)
         splits = (capacity + TUNABLES['attention.BLOCK'] - 1) // TUNABLES['attention.BLOCK']
-        self.partial = torch.empty((batch, 32, splits, 128), device=device, dtype=torch.float32)
-        self.lse = torch.empty((batch, 32, splits), device=device, dtype=torch.float32)
+        self.partial = self.lse = None
+        if scratch:
+            self.partial = torch.empty((rows, 32, splits, 128), device=device, dtype=torch.float32)
+            self.lse = torch.empty((rows, 32, splits), device=device, dtype=torch.float32)
 
-    def layer(self, w, k, v, position, cos, sin, mask, carry_in=False, defer_out=False):
+    def layer(self, w, k, v, base, cos, sin, carry_in=False, defer_out=False):
         """One decoder layer on fixed buffers.
 
-        With fuse_norm_residual, carry_in folds the previous layer's pending
+        base is the int64 [B] tensor of root cache slots. With
+        fuse_norm_residual, carry_in folds the previous layer's pending
         down-projection output (still in branch) into this layer's input norm,
         and defer_out leaves this layer's down output in branch for the next
         norm instead of adding it into x. Defaults reproduce the unfused chain.
@@ -49,17 +57,9 @@ class DecodeBuffers:
         else:
             norm_out(self.x, w.input_norm, self.norm, w.eps)
         self.mm(self.norm, w.qkv, self.qkv)
-        qk_rope_cache_out(self.qkv, w.q_norm, w.k_norm, cos, sin, position,
+        qk_rope_cache_out(self.qkv, w.q_norm, w.k_norm, cos, sin, base, self.tree,
                           self.q, k, v, self.qk_scratch, self.config['fuse_qk_norm_rope'])
-        if self.config['attention_impl'] == 'triton':
-            attention_out(self.q, k, v, position, self.attn, self.partial, self.lse)
-        else:
-            # Four query rows per KV head; all four use the same visible prefix.
-            # SDPA's output/workspace is owned by the CUDA graph's private pool.
-            grouped = F.scaled_dot_product_attention(self.q_grouped, k, v,
-                                                      attn_mask=mask, is_causal=False,
-                                                      scale=128 ** -0.5)
-            self.attn_grouped.copy_(grouped)
+        self.attend(k, v, base)
         self.mm(self.attn_flat, w.o, self.branch)
         if self.config['fuse_norm_residual']:
             norm_out(self.branch, w.post_norm, self.norm, w.eps, self.x, self.x)
@@ -72,11 +72,46 @@ class DecodeBuffers:
         if not (defer_out and self.config['fuse_norm_residual']):
             torch.add(self.x, self.branch, out=self.x)
 
+    def attend(self, k, v, base):
+        attention_out(self.q, k, v, base, self.tree, self.attn, self.partial, self.lse)
 
-def cache_storage(batch, capacity, device, layout):
-    """Return logical BHSD cache backed by the selected physical layout."""
+
+class PrefillTree:
+    """Prompt rows as one chain: token p of every sequence sits at position and slot p."""
+
+    def __init__(self, length, device):
+        self.nodes = length
+        self.max_depth = length - 1
+        self.depth = torch.arange(length, device=device, dtype=torch.int32)
+
+
+class PrefillBuffers(DecodeBuffers):
+    """The decode layer over batch * prompt rows with causal FlashAttention reading the cache.
+
+    K and V are consumed straight from the cache slots the fused RoPE kernel
+    wrote, with the eight KV heads shared by their four query heads inside the
+    kernel, so no 32-head copy of the prompt's keys and values is ever made.
+    """
+
+    def __init__(self, batch, prompt_length, device, config=None):
+        super().__init__(batch, prompt_length, device, config, PrefillTree(prompt_length, device), scratch=False)
+        self.batch, self.length = batch, prompt_length
+
+    def attend(self, k, v, base):
+        import torch.nn.functional as F
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+        query = self.q.view(self.batch, self.length, 32, 128).transpose(1, 2)
+        with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+            out = F.scaled_dot_product_attention(query, k[:, :, :self.length], v[:, :, :self.length],
+                                                 dropout_p=0.0, is_causal=self.length > 1,
+                                                 scale=128 ** -0.5, enable_gqa=True)
+        self.attn.copy_(out.transpose(1, 2).reshape(self.rows, 32, 128))
+
+
+def cache_storage(batch, capacity, device, layout, layers=1):
+    """Return [layers,B,8,capacity,128] logical BHSD storage in the selected physical layout."""
     if layout == 'bhsd':
-        return torch.zeros((batch, 8, capacity, 128), dtype=torch.bfloat16, device=device)
+        return torch.zeros((layers, batch, 8, capacity, 128), dtype=torch.bfloat16, device=device)
     if layout == 'bshd':
-        return torch.zeros((batch, capacity, 8, 128), dtype=torch.bfloat16, device=device).transpose(1, 2)
+        return torch.zeros((layers, batch, capacity, 8, 128), dtype=torch.bfloat16, device=device).transpose(2, 3)
     raise ValueError('invalid kv_layout')

@@ -24,7 +24,8 @@ KEPT_ITEMS = {'static_kv_cache', 'bypass_wrapper', 'cuda_graph_decode', 'concat_
 PLAYBOOK = ['residual_fuse_norm', 'attention_splitk', 'lm_head_argmax_tiled', 'prefill_packed_weights',
             'gemm_epilogue_residual', 'per_shape_config', 'speculative_prompt_lookup']
 REPAIR_TURNS = 2
-UNIT_TEST_FILES = ('tests/test_hand_rolled_kernels.py', 'tests/test_hand_rolled_handoff.py')
+UNIT_TEST_FILES = ('tests/test_hand_rolled_kernels.py', 'tests/test_hand_rolled_handoff.py',
+                   'tests/test_hand_rolled_corpus.py')
 FIRST_ERROR_CHARS = 4000
 
 

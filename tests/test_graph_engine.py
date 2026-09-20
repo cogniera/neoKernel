@@ -37,7 +37,9 @@ class GraphEngineTests(unittest.TestCase):
 
     def _check_prefill_and_reset(self, layout):
         import torch
-        from transformers import Qwen3Config, Qwen3ForCausalLM, StaticCache
+        if not torch.cuda.is_available():
+            self.skipTest('grouped-query flash prefill needs CUDA')
+        from transformers import Qwen3Config, Qwen3ForCausalLM
         path = Path(__file__).resolve().parents[1]/'engine/engine.py'
         sys.path.insert(0, str(path.parent))
         spec = importlib.util.spec_from_file_location('tested_graph_engine', path)
@@ -47,27 +49,24 @@ class GraphEngineTests(unittest.TestCase):
         config = Qwen3Config(vocab_size=32, hidden_size=64, intermediate_size=128,
                             num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2, head_dim=16)
         config._attn_implementation = 'sdpa'
-        model = Qwen3ForCausalLM(config).eval()
-        cache = engine.PrefixStaticCache(config, max_batch_size=2, max_cache_len=9, device='cpu', dtype=torch.float32,
-                                         layout=layout)
-        mask = torch.zeros((2, 1, 1, 9), dtype=torch.bool)
+        model = Qwen3ForCausalLM(config).eval().cuda().bfloat16()
+        shape = (2, 2, 2, 9, 16) if layout == 'bhsd' else (2, 2, 9, 2, 16)
+        storage = [torch.zeros(shape, device='cuda', dtype=torch.bfloat16) for _ in range(2)]
+        if layout == 'bshd':
+            storage = [s.transpose(2, 3) for s in storage]
+        cache = engine.PrefixCache(*storage)
         with torch.inference_mode():
             for _ in range(2):
-                # A fresh prompt must overwrite every active cache slot and
-                # attention must never consume the unused capacity.
+                # A fresh prompt must overwrite every active cache slot; the
+                # prefill writes only the prompt's slots and returns native K/V.
                 for tensor in cache.key_cache + cache.value_cache:
                     tensor.fill_(123.0)
-                mask.zero_()
-                mask[:, :, :, :5].fill_(True)
-                sequence = torch.randint(0, 32, (2, 5))
-                current = sequence
-                for start in [0, 5, 6, 7]:
-                    positions = torch.arange(start, start+current.shape[1])
-                    if start:
-                        mask.index_fill_(3, positions, True)
-                    cache.prefill_length = 0 if start else 5
-                    actual = engine.qwen_forward(model, current, cache, positions, positions[None], mask if start else None)
-                    expected = model(sequence, use_cache=False, logits_to_keep=1).logits
-                    torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
-                    current = actual[:, -1].argmax(-1, keepdim=True)
-                    sequence = torch.cat((sequence, current), dim=1)
+                sequence = torch.randint(0, 32, (2, 5), device='cuda')
+                positions = torch.arange(5, device='cuda')
+                cache.prefill_length = 5
+                actual = engine.qwen_forward(model, sequence, cache, positions, positions[None], None)
+                expected = model(sequence, use_cache=False, logits_to_keep=1).logits
+                torch.testing.assert_close(actual.float(), expected.float(), atol=1e-2, rtol=1e-2)
+                for tensor in cache.key_cache + cache.value_cache:
+                    self.assertTrue((tensor[:, :, 5:] == 123.0).all().item())
+                    self.assertFalse((tensor[:, :, :5] == 123.0).all().item())
