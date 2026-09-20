@@ -18,3 +18,15 @@ TUNABLES = {
     "merge.num_warps": 4,
     "merge.num_stages": 1,
 }
+
+
+def _select_attention(batch, prompt_length, output_length):
+    if batch == 1:
+        return 'sdpa_grouped', 'bshd'
+    return 'triton', 'bhsd'
+
+
+def configure_for_shape(batch, prompt_length, output_length):
+    impl, layout = _select_attention(batch, prompt_length, output_length)
+    CONFIG['attention_impl'] = impl
+    CONFIG['kv_layout'] = layout

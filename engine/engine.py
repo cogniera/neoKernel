@@ -2,7 +2,7 @@
 
 import torch
 from transformers import AutoModelForCausalLM, StaticCache
-from kernels import CONFIG, TUNABLES
+from kernels import CONFIG, TUNABLES, configure_for_shape
 
 
 # Configuration is fixed for the lifetime of an imported engine.
@@ -23,9 +23,6 @@ class PrefixStaticCache(StaticCache):
 
     def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
         if self.prefill_length:
-            # generate() prefills the entire prompt starting at position zero.
-            # Populate the fixed decode cache without indexed writes, and let
-            # prefill attention consume the original native K/V tensors.
             self.key_cache[layer_idx][:, :, :self.prefill_length, :].copy_(key_states)
             self.value_cache[layer_idx][:, :, :self.prefill_length, :].copy_(value_states)
             return key_states, value_states
@@ -43,15 +40,12 @@ def qwen_forward(model, input_ids, cache, cache_position, position_ids, attentio
             past_key_value=cache, use_cache=True, cache_position=cache_position,
             position_embeddings=position_embeddings,
         )[0]
-    # RMSNorm is independent across tokens; only the final logits are used.
     x = base.norm(x[:, -1:, :])
     return model.lm_head(x)
 
 
 class Engine:
     def __init__(self, model_path):
-        # Lazy device imports allow the native-prefill CPU regression to run on
-        # hosts without Triton. These execute during loading, never in a step.
         from kernels.decode import DecodeBuffers
         from kernels.weights import LayerWeights
         from kernels.rmsnorm import norm_out
@@ -74,6 +68,9 @@ class Engine:
         self.graph = None
 
     def prepare(self, batch, prompt_length, output_length):
+        configure_for_shape(batch, prompt_length, output_length)
+        DECODE_CONFIG['attention_impl'] = CONFIG['attention_impl']
+        DECODE_CONFIG['kv_layout'] = CONFIG['kv_layout']
         self.graph = None
         self.prefill_graph = None
         self.prompt_ids = torch.empty((batch, prompt_length), device="cuda:0", dtype=torch.int64)
@@ -107,7 +104,6 @@ class Engine:
                                self.cache_position, self.cos, self.sin, self.decode_mask)
         self.norm_out(self.buffers.x, self.final_norm, self.buffers.norm, self.final_eps)
         torch.mm(self.buffers.norm, self.lm_head, out=self.logits)
-        # torch.argmax chooses the lowest vocabulary index on exact ties.
         torch.argmax(self.logits, dim=-1, keepdim=True, out=self.next_tokens)
         return self.next_tokens
 
