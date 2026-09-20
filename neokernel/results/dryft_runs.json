@@ -282,6 +282,13 @@
           "latency": "pass"
         }
       }
+    },
+    {
+      "commit": "4fcf3c1",
+      "label": "prefill fused RMSNorm and SiLU/product",
+      "score": 837.1,
+      "source": "User reported score in chat; run ID and per-workload measurements were not supplied.",
+      "note": "Reported improvement over 774.9. This is the baseline for the next candidate, not a measured result for the packed-prefill change."
     }
   ]
 }

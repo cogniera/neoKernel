@@ -3,7 +3,6 @@
 import torch
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb
 from transformers import AutoModelForCausalLM, StaticCache
 from kernels import CONFIG, TUNABLES
 
@@ -36,44 +35,43 @@ class PrefixStaticCache(StaticCache):
 
 
 @torch.inference_mode()
-def qwen_forward(model, input_ids, cache, cache_position, position_ids, attention_mask):
-    from kernels.prefill import norm, silu_mul
+def qwen_forward(model, input_ids, cache, packed_layers):
+    from kernels.prefill import norm, add_norm, qkv_cache, packed_silu_mul
 
     base = model.model
-    x = base.embed_tokens(input_ids)
-    cos, sin = base.rotary_emb(x, position_ids)
     batch, length = input_ids.shape
-    # Keep the native projections and BF16 rounding boundaries.
-    # FlashAttention consumes eight KV heads directly instead
-    # of materializing repeat_kv's 32-head copies at every layer.
+    x = base.embed_tokens(input_ids)
+    positions = torch.arange(length, device=input_ids.device).unsqueeze(0)
+    cos, sin = base.rotary_emb(x, positions)
+    normalized = norm(x, base.layers[0].input_layernorm)
     with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
         for layer_idx, layer in enumerate(base.layers):
-            residual = x
-            normalized = norm(x, layer.input_layernorm)
-            attn = layer.self_attn
-            head_shape = (batch, length, -1, attn.head_dim)
-            q = norm(attn.q_proj(normalized).view(head_shape), attn.q_norm).transpose(1, 2)
-            k = norm(attn.k_proj(normalized).view(head_shape), attn.k_norm).transpose(1, 2)
-            v = attn.v_proj(normalized).view(head_shape).transpose(1, 2)
-            q, k = apply_rotary_pos_emb(q, k, cos, sin)
-            k, v = cache.update(k, v, layer_idx, {
-                "sin": sin, "cos": cos, "cache_position": cache_position,
-            })
-            attended = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=attention_mask, dropout_p=0.0,
-                is_causal=attention_mask is None and length > 1,
-                scale=attn.scaling, enable_gqa=True,
+            weights = packed_layers[layer_idx]
+            packed = F.linear(normalized, weights.qkv_weight)
+            q, k, v = qkv_cache(
+                packed, layer.self_attn, cos, sin,
+                cache.key_cache[layer_idx], cache.value_cache[layer_idx],
             )
-            attended = attended.transpose(1, 2).contiguous().view(batch, length, -1)
-            x = residual + attn.o_proj(attended)
-            residual = x
-            normalized = norm(x, layer.post_attention_layernorm)
-            mlp = layer.mlp
-            product = silu_mul(mlp.gate_proj(normalized), mlp.up_proj(normalized))
-            x = residual + mlp.down_proj(product)
-    # RMSNorm is independent across tokens; only the final logits are used.
-    x = norm(x[:, -1:, :], base.norm)
-    return model.lm_head(x)
+            last = layer_idx == len(base.layers) - 1
+            if last:
+                # All prompt K/V are already cached. Earlier query outputs in
+                # the final layer have no consumers; only the last predicts a token.
+                q = q[:, :, -1:, :]
+                x = x[:, -1:, :]
+            attended = F.scaled_dot_product_attention(
+                q, k, v, dropout_p=0.0, is_causal=not last and length > 1,
+                scale=layer.self_attn.scaling, enable_gqa=True,
+            )
+            attended = attended.transpose(1, 2).contiguous().view(batch, 1 if last else length, -1)
+            branch = layer.self_attn.o_proj(attended)
+            normalized, residual = add_norm(branch, x, layer.post_attention_layernorm)
+            gate_up = F.linear(normalized, weights.gate_up_weight)
+            branch = layer.mlp.down_proj(packed_silu_mul(gate_up))
+            if last:
+                normalized, _ = add_norm(branch, residual, base.norm)
+            else:
+                normalized, x = add_norm(branch, residual, base.layers[layer_idx + 1].input_layernorm)
+    return model.lm_head(normalized)
 
 
 class Engine:
@@ -168,8 +166,7 @@ class Engine:
         torch.cuda.current_stream().wait_stream(stream)
 
     def prefill(self):
-        logits = qwen_forward(self.model, self.prompt_ids, self.cache, self.prefill_positions,
-                              self.prefill_positions.unsqueeze(0), None)
+        logits = qwen_forward(self.model, self.prompt_ids, self.cache, self.layers)
         self.token_ids.copy_(logits[:, -1, :].argmax(dim=-1, keepdim=True))
 
     def capture_prefill(self):
