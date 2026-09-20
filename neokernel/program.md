@@ -24,7 +24,7 @@ Dryft is the speed judge; the local judge is correctness only. Local speed verdi
 
 Kept items: **static_kv_cache**, **bypass_wrapper**, **cuda_graph_decode**, **concat_qkv**, **concat_gate_up**, **fused_rmsnorm**, **fused_qk_norm_rope_kv_write**, **fused_silu_mul**, **decode_attention_kernel**, plus the native-prefill CUDA graph. Read `engine/kernels/decode.py` before proposing: the decode layer already runs packed QKV and gate/up GEMMs, a fused Q/K norm + RoPE + cache write, a fused SiLU product, the post-attention residual fused into `norm_out`, and a split-K Triton attention (`_partial` over cache blocks, `_merge` by log-sum-exp). Do not re-propose those. Preserve their implementations and interfaces; the unit tests import `norm_out`, `qk_rope_cache_out`, `silu_mul_out`, `attention_out`, `cache_storage`, `DecodeBuffers`, `LayerWeights`, and the engine attributes `graph`, `prefill_graph`, `token_ids`, `buffers`, `cache`, `logits`, `model`, `shape`, `DECODE_CONFIG`.
 
-Propose the first item below that is neither kept nor exhausted by five reverts. Deviate only when the profile in context shows a larger gap elsewhere, and say so in the reasoning.
+Propose the first item below that is neither kept nor exhausted by five reverts, restricted to the context's `selected_items` when the operator narrows the run to specific items. Deviate only when the profile in context shows a larger gap elsewhere, and say so in the reasoning.
 
 ## Ordered playbook
 

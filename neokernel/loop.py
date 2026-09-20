@@ -105,12 +105,12 @@ def history_summary(records: list[dict]) -> dict:
             "coverage": [item for item in PLAYBOOK if not tried[item]]}
 
 
-def context(engine_dir: Path, profile: dict, records: list[dict]) -> list[dict]:
+def context(engine_dir: Path, profile: dict, records: list[dict], items: list[str] | None = None) -> list[dict]:
     program = Path(__file__).with_name("program.md").read_text(encoding="utf-8")
     static = program + "\nGuard rules: only torch, triton, transformers, safetensors, math, os (read-only), typing, dataclasses, functools, itertools, collections, json, and local engine modules. No timers, CUDA events, exec/eval, importlib, subprocess, socket, writes, module mutation, or environment mutation. Literal disabling TF32 is the sole module-setting exception.\nReturn a proposal matching this schema:\n" + json.dumps(PROPOSAL_SCHEMA, sort_keys=True)
     files = {"engine/"+name: data.decode("utf-8") for name, data in snapshot(engine_dir).items() if allowed_path("engine/"+name)}
     diff = subprocess.run(["git", "diff", "--", "engine/"], cwd=ROOT, capture_output=True, text=True).stdout
-    dynamic = {"last_15_log_lines": records[-15:], "history": history_summary(records),
+    dynamic = {"selected_items": items or PLAYBOOK, "last_15_log_lines": records[-15:], "history": history_summary(records),
                "profile": {k: v for k, v in profile.items() if k != 'trace'},
                "current_files": files, "current_diff": diff}
     return [{"role": "system", "content": static}, {"role": "user", "content": json.dumps(dynamic)}]
@@ -216,7 +216,7 @@ def parse_proposal_text(text: str) -> Proposal:
 
 def validate_proposal(proposal: Proposal, items: list[str], records: list[dict]) -> None:
     if proposal.item not in items:
-        raise ValueError("item is not in the selected playbook")
+        raise ValueError(f"item is not in the selected playbook; this run accepts only: {', '.join(items)}")
     summary = history_summary(records)
     if summary["reverts"].get(proposal.item, 0) >= 5:
         raise ValueError("move-on rule: this item already has five reverts")
@@ -388,7 +388,7 @@ def run_loop(args, remote, proposer=None) -> int:
             # Use available profile data; new GPU work goes through judge calls only.
             profile_path = RESULTS / 'profile.json'
             profile = json.loads(profile_path.read_text()) if profile_path.exists() else {}
-            messages = context(engine_dir, profile, records)
+            messages = context(engine_dir, profile, records, items)
             transaction.begin('proposal_rejected', 'agent')
             proposal = None
             for retry in range(2):
