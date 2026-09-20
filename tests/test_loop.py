@@ -86,13 +86,13 @@ class FakeProposer:
         self.files = files or FILES
         self.repairs, self.conversations = list(repairs), []
     def propose(self, messages):
-        return Proposal('lm_head_argmax', 'test hypothesis', '2 percent', self.files, 'latency', 'test reasoning')
+        return Proposal('lm_head_argmax_tiled', 'test hypothesis', '2 percent', self.files, 'latency', 'test reasoning')
     def repair(self, conversation):
         self.conversations.append(list(conversation))
         files = self.repairs.pop(0)
         if files is None:
             raise ValueError('invalid proposal after one retry: not json')
-        return Proposal('lm_head_argmax', 'test hypothesis', '2 percent', files, 'latency', 'repaired')
+        return Proposal('lm_head_argmax_tiled', 'test hypothesis', '2 percent', files, 'latency', 'repaired')
 
 
 class LoopTests(unittest.TestCase):
@@ -295,6 +295,11 @@ class LoopTests(unittest.TestCase):
     def test_judge_alone_and_merge_assert(self):
         self.assertFalse(keep_decision(result(101), result())[0])
         self.assertFalse(keep_decision(result(999, False), result())[0])
+        two = result(100); two['workloads'].append(dict(two['workloads'][0], name='public-2', tps=1000))
+        mixed = result(110); mixed['workloads'].append(dict(mixed['workloads'][0], name='public-2', tps=960))
+        self.assertFalse(keep_decision(mixed, two)[0])  # +10% geomean, public-2 down 4%: not kept
+        mixed['workloads'][1]['tps'] = 975
+        self.assertTrue(keep_decision(mixed, two)[0])
         wrong = result(999); wrong['workloads'][0]['name'] = 'other'
         self.assertFalse(keep_decision(wrong, result())[0])
         wrong['workloads'][0]['failure_code'] = 'harness_error'

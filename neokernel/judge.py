@@ -401,7 +401,10 @@ def keep_decision(result: dict, baseline: dict) -> tuple[bool, float | None]:
                   and signature(result) == signature(baseline)
                   and all(w.get('passed') and w.get('gates') and all(w['gates'].values()) for w in result['workloads']))
     delta = (score / previous - 1) * 100 if score and previous and math.isfinite(score) and math.isfinite(previous) and previous > 0 else None
-    return bool(passed and delta is not None and delta > 1.0 and score > previous * 1.01), delta
+    # A geomean win that trades one shape for another is not kept (experiment #37).
+    before = {w['name']: w.get('tps') for w in baseline.get('workloads', [])}
+    regressed = any(before.get(w['name']) and w.get('tps', 0) < before[w['name']] * 0.97 for w in result.get('workloads', []))
+    return bool(passed and not regressed and delta is not None and delta > 1.0 and score > previous * 1.01), delta
 
 
 def evaluate(engine_dir: Path, model_path: str, workloads: list[Workload], samples: int,

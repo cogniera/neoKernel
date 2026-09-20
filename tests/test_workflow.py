@@ -22,11 +22,17 @@ class WorkflowTests(unittest.TestCase):
     def test_post_hand_rolled_program_matches_playbook(self):
         from neokernel.loop import PLAYBOOK, KEPT_ITEMS
         program = (Path(__file__).resolve().parents[1] / 'neokernel/program.md').read_text(encoding='utf-8')
-        self.assertEqual(PLAYBOOK, ['attention_impl_kv_layout', 'lm_head_argmax', 'prefill_packed_weights', 'prefill_cuda_graph'])
+        self.assertEqual(PLAYBOOK, ['residual_fuse_norm', 'attention_splitk', 'lm_head_argmax_tiled', 'prefill_packed_weights',
+                                    'gemm_epilogue_residual', 'per_shape_config', 'speculative_prompt_lookup'])
         self.assertEqual(len(KEPT_ITEMS), 9)
-        for item in KEPT_ITEMS | set(PLAYBOOK):
+        for item in KEPT_ITEMS:
             self.assertIn('**' + item + '**', program)
-        for text in ['After five reverted attempts', '## Whole-file proposal format', 'Never move a cast', 'No quantization', '670.7', '2.125']:
+        for number, item in enumerate(PLAYBOOK, 1):
+            self.assertIn(f'### {number}. {item}', program)
+        self.assertIn('### 8. tolerance_budget', program)
+        for text in ['After five reverted attempts', '## Whole-file proposal format', 'Never move a cast', 'Forbidden: quantization',
+                     '670.7', '2.125', '3 percent below its baseline', '## Repair stage', 'failed after 2 repairs',
+                     'tl.arange', 'make_prompt', 'SPECULATIVE = True', '4.75 / 6.06 / 6.16', '1,385']:
             self.assertIn(text, program)
 
     def test_incremental_task_budget_preserves_reservation_stop(self):

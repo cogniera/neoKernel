@@ -21,7 +21,8 @@ from .judge import keep_decision
 
 KEPT_ITEMS = {'static_kv_cache', 'bypass_wrapper', 'cuda_graph_decode', 'concat_qkv', 'concat_gate_up',
               'fused_rmsnorm', 'fused_qk_norm_rope_kv_write', 'fused_silu_mul', 'decode_attention_kernel'}
-PLAYBOOK = ['attention_impl_kv_layout', 'lm_head_argmax', 'prefill_packed_weights', 'prefill_cuda_graph']
+PLAYBOOK = ['residual_fuse_norm', 'attention_splitk', 'lm_head_argmax_tiled', 'prefill_packed_weights',
+            'gemm_epilogue_residual', 'per_shape_config', 'speculative_prompt_lookup']
 REPAIR_TURNS = 2
 UNIT_TEST_FILES = ('tests/test_hand_rolled_kernels.py', 'tests/test_hand_rolled_handoff.py')
 FIRST_ERROR_CHARS = 4000
