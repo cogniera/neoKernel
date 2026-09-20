@@ -99,7 +99,9 @@ def history_summary(records: list[dict]) -> dict:
     tried = Counter(r["item"] for r in records if r.get("proposer") == "agent")
     reverted = Counter(r["item"] for r in records if r.get("proposer") == "agent" and not r.get("kept"))
     kept = sorted(KEPT_ITEMS | {item for r in records if r.get('kept') for item in [r['item'], *r.get('implemented_items', [])]})
+    dryft = {r['item']: {'id': r['id'], 'kept': r['kept'], 'dryft_tps': r['dryft_tps']} for r in records if r.get('dryft_tps')}
     return {"attempts": dict(tried), "reverts": dict(reverted), "kept": kept,
+            "current_base": [item for item, v in dryft.items() if v['kept']], "dryft_verdicts": dryft,
             "coverage": [item for item in PLAYBOOK if not tried[item]]}
 
 

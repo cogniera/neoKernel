@@ -154,6 +154,8 @@ class LogLine:
     implemented_items: list[str] = field(default_factory=list)
     repairs: int = 0
     first_error: str | None = None
+    dryft_tps: float | None = None
+    dryft_run: str | None = None
 
 
 def json_schema(annotation) -> dict:

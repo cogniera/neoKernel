@@ -20,6 +20,8 @@ Where the engine stands, so you know the distance:
 
 ## Kept state
 
+Dryft is the speed judge; the local judge is correctness only. Local speed verdicts are noisy (about ±10 percent) and are not evidence against an approach; only Dryft results and correctness failures are. The context's `history.current_base` lists the items kept by Dryft official runs and `history.dryft_verdicts` carries each Dryft score: **residual_fuse_norm** is kept at 697.2 tok/s (trial commit 36cce5c, tag dryft-best-39); #37's global attention layout was reverted at 643.0 tok/s.
+
 Kept items: **static_kv_cache**, **bypass_wrapper**, **cuda_graph_decode**, **concat_qkv**, **concat_gate_up**, **fused_rmsnorm**, **fused_qk_norm_rope_kv_write**, **fused_silu_mul**, **decode_attention_kernel**, plus the native-prefill CUDA graph. Read `engine/kernels/decode.py` before proposing: the decode layer already runs packed QKV and gate/up GEMMs, a fused Q/K norm + RoPE + cache write, a fused SiLU product, the post-attention residual fused into `norm_out`, and a split-K Triton attention (`_partial` over cache blocks, `_merge` by log-sum-exp). Do not re-propose those. Preserve their implementations and interfaces; the unit tests import `norm_out`, `qk_rope_cache_out`, `silu_mul_out`, `attention_out`, `cache_storage`, `DecodeBuffers`, `LayerWeights`, and the engine attributes `graph`, `prefill_graph`, `token_ids`, `buffers`, `cache`, `logits`, `model`, `shape`, `DECODE_CONFIG`.
 
 Propose the first item below that is neither kept nor exhausted by five reverts. Deviate only when the profile in context shows a larger gap elsewhere, and say so in the reasoning.
