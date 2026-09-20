@@ -167,6 +167,45 @@
       },
       "commit": "48fa90b",
       "status": "succeeded"
+    },
+    {
+      "run_id": "02d718ce",
+      "label": "pipelined decode loop on attention_splitk",
+      "score": 779.2,
+      "rank": 44,
+      "source": "Run page text supplied by the user in chat on 2026-09-20 UTC.",
+      "note": "Official run 13; commit 3ae5b52; team best at capture.",
+      "workloads": {
+        "public-0": {
+          "ttft_ms": 19.23,
+          "tpot_ms": 4.34,
+          "tps": 208.1,
+          "batch_time_ms": 153.79,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 10.2
+        },
+        "public-1": {
+          "ttft_ms": 199.03,
+          "tpot_ms": 4.9,
+          "tps": 364.5,
+          "batch_time_ms": 351.19,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 11.9
+        },
+        "public-2": {
+          "ttft_ms": 188.25,
+          "tpot_ms": 5.01,
+          "tps": 2485.8,
+          "batch_time_ms": 823.87,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 12.65
+        }
+      },
+      "commit": "3ae5b52",
+      "status": "succeeded"
     }
   ]
 }

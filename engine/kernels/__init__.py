@@ -1,6 +1,6 @@
 """Decode choices; numeric values are compatible with neokernel.sweep."""
 
-CONFIG = {'fuse_norm_residual': True, 'fuse_qk_norm_rope': True, 'fuse_silu_mul': True, 'attention_impl': 'triton', 'kv_layout': 'bhsd'}
+CONFIG = {'fuse_norm_residual': True, 'fuse_qk_norm_rope': True, 'fuse_silu_mul': True, 'attention_impl': 'triton', 'kv_layout': 'bhsd', 'skinny_gemm': True}
 
 TUNABLES = {
     "norm.BLOCK": 4096,
@@ -17,4 +17,7 @@ TUNABLES = {
     "attention.num_stages": 1,
     "merge.num_warps": 4,
     "merge.num_stages": 1,
+    "gemm.BLOCK": 128,
+    "gemm.num_warps": 4,
+    "gemm.num_stages": 4,
 }

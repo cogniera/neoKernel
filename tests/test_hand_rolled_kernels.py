@@ -122,6 +122,20 @@ class HandRolledKernelTests(unittest.TestCase):
             self.report(f'silu/{batch}/{fused}', out, ref, .03125)
 
     @torch.inference_mode() if GPU else (lambda f: f)
+    def test_skinny_gemm(self):
+        from kernels.gemm import skinny_mm
+        for n, k in ((6144, 2560), (2560, 4096), (19456, 2560), (2560, 9728)):
+            w = self.rand(n, k) * 0.02
+            for m in (1, 4, 16, 32):
+                x = self.rand(m, k)
+                out = torch.empty((m, n), device='cuda', dtype=torch.bfloat16)
+                skinny_mm(x, w.t(), out)
+                exact = torch.mm(x.float(), w.float().t())
+                # One BF16 rounding of an fp32 accumulation: within half an ulp of exact.
+                self.report(f'gemm/{n}x{k}/{m}', out, exact, .015625, .004)
+                torch.testing.assert_close(out.float(), torch.mm(x, w.t()).float(), atol=.03125, rtol=.008)
+
+    @torch.inference_mode() if GPU else (lambda f: f)
     def test_attention(self):
         from kernels.attention import attention_out
         from kernels.decode import cache_storage, DecodeBuffers

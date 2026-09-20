@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from kernels import CONFIG, TUNABLES
 from kernels.elementwise import norm_out, qk_rope_cache_out, silu_mul_out
 from kernels.attention import attention_out
+from kernels.gemm import skinny_mm
 from kernels.weights import LayerWeights
 
 
@@ -17,6 +18,7 @@ class DecodeBuffers:
             raise ValueError('invalid kv_layout')
         def alloc(*shape):
             return torch.empty(shape, device=device, dtype=torch.bfloat16)
+        self.mm = skinny_mm if self.config.get('skinny_gemm', True) else (lambda a, b, out: torch.mm(a, b, out=out))
         self.x = alloc(batch, 2560)
         self.norm = alloc(batch, 2560)
         self.branch = alloc(batch, 2560)
@@ -46,7 +48,7 @@ class DecodeBuffers:
             norm_out(self.branch, w.input_norm, self.norm, w.eps, self.x, self.x)
         else:
             norm_out(self.x, w.input_norm, self.norm, w.eps)
-        torch.mm(self.norm, w.qkv, out=self.qkv)
+        self.mm(self.norm, w.qkv, self.qkv)
         qk_rope_cache_out(self.qkv, w.q_norm, w.k_norm, cos, sin, position,
                           self.q, k, v, self.qk_scratch, self.config['fuse_qk_norm_rope'])
         if self.config['attention_impl'] == 'triton':
@@ -58,15 +60,15 @@ class DecodeBuffers:
                                                       attn_mask=mask, is_causal=False,
                                                       scale=128 ** -0.5)
             self.attn_grouped.copy_(grouped)
-        torch.mm(self.attn_flat, w.o, out=self.branch)
+        self.mm(self.attn_flat, w.o, self.branch)
         if self.config['fuse_norm_residual']:
             norm_out(self.branch, w.post_norm, self.norm, w.eps, self.x, self.x)
         else:
             torch.add(self.x, self.branch, out=self.x)
             norm_out(self.x, w.post_norm, self.norm, w.eps)
-        torch.mm(self.norm, w.gate_up, out=self.gate_up)
+        self.mm(self.norm, w.gate_up, self.gate_up)
         silu_mul_out(self.gate_up, self.product, self.activation, self.config['fuse_silu_mul'])
-        torch.mm(self.product, w.down, out=self.branch)
+        self.mm(self.product, w.down, self.branch)
         if not (defer_out and self.config['fuse_norm_residual']):
             torch.add(self.x, self.branch, out=self.x)
 
