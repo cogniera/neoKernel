@@ -37,21 +37,23 @@ class PrefixStaticCache(StaticCache):
 
 @torch.inference_mode()
 def qwen_forward(model, input_ids, cache, cache_position, position_ids, attention_mask):
+    from kernels.prefill import norm, silu_mul
+
     base = model.model
     x = base.embed_tokens(input_ids)
     cos, sin = base.rotary_emb(x, position_ids)
     batch, length = input_ids.shape
-    # Keep the native projection and BF16 rounding boundaries. Only attention
-    # dispatch changes: FlashAttention consumes eight KV heads directly instead
+    # Keep the native projections and BF16 rounding boundaries.
+    # FlashAttention consumes eight KV heads directly instead
     # of materializing repeat_kv's 32-head copies at every layer.
     with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
         for layer_idx, layer in enumerate(base.layers):
             residual = x
-            normalized = layer.input_layernorm(x)
+            normalized = norm(x, layer.input_layernorm)
             attn = layer.self_attn
             head_shape = (batch, length, -1, attn.head_dim)
-            q = attn.q_norm(attn.q_proj(normalized).view(head_shape)).transpose(1, 2)
-            k = attn.k_norm(attn.k_proj(normalized).view(head_shape)).transpose(1, 2)
+            q = norm(attn.q_proj(normalized).view(head_shape), attn.q_norm).transpose(1, 2)
+            k = norm(attn.k_proj(normalized).view(head_shape), attn.k_norm).transpose(1, 2)
             v = attn.v_proj(normalized).view(head_shape).transpose(1, 2)
             q, k = apply_rotary_pos_emb(q, k, cos, sin)
             k, v = cache.update(k, v, layer_idx, {
@@ -65,9 +67,12 @@ def qwen_forward(model, input_ids, cache, cache_position, position_ids, attentio
             attended = attended.transpose(1, 2).contiguous().view(batch, length, -1)
             x = residual + attn.o_proj(attended)
             residual = x
-            x = residual + layer.mlp(layer.post_attention_layernorm(x))
+            normalized = norm(x, layer.post_attention_layernorm)
+            mlp = layer.mlp
+            product = silu_mul(mlp.gate_proj(normalized), mlp.up_proj(normalized))
+            x = residual + mlp.down_proj(product)
     # RMSNorm is independent across tokens; only the final logits are used.
-    x = base.norm(x[:, -1:, :])
+    x = norm(x[:, -1:, :], base.norm)
     return model.lm_head(x)
 
 

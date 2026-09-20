@@ -244,6 +244,44 @@
           "latency": "pass"
         }
       }
+    },
+    {
+      "run_id": "c178a773",
+      "commit": "8ca6b9b",
+      "label": "grouped-query FlashAttention prefill and pipelined single-token decode",
+      "score": 774.9,
+      "status": "succeeded",
+      "source": "Run page text supplied by the user in chat on 2026-09-20.",
+      "note": "Submission 18, attempt 1 of 3; eligible score, all public cases and latency gates passed, zero platform errors. Team best remains 779.2 at rank 44.",
+      "workloads": {
+        "public-0": {
+          "tps": 204.0,
+          "batch_time_ms": 156.83,
+          "ttft_ms": 18.7,
+          "tpot_ms": 4.46,
+          "memory_gib": 10.22,
+          "result": "passed",
+          "latency": "pass"
+        },
+        "public-1": {
+          "tps": 374.1,
+          "batch_time_ms": 342.2,
+          "ttft_ms": 187.92,
+          "tpot_ms": 4.98,
+          "memory_gib": 12.0,
+          "result": "passed",
+          "latency": "pass"
+        },
+        "public-2": {
+          "tps": 2488.8,
+          "batch_time_ms": 822.9,
+          "ttft_ms": 177.53,
+          "tpot_ms": 5.08,
+          "memory_gib": 12.75,
+          "result": "passed",
+          "latency": "pass"
+        }
+      }
     }
   ]
 }
