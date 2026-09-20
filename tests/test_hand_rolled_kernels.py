@@ -127,7 +127,7 @@ class HandRolledKernelTests(unittest.TestCase):
         from kernels.decode import cache_storage, DecodeBuffers
         from transformers.models.qwen3.modeling_qwen3 import repeat_kv
         import torch.nn.functional as F
-        for batch, capacity, layout in itertools.product((1, 4, 16), (640, 2080), ('bhsd', 'bshd')):
+        for batch, capacity, layout in itertools.product((1, 4, 16), (544, 640, 2080), ('bhsd', 'bshd')):
             q = self.rand(batch, 32, 128)
             k, v = [cache_storage(batch, capacity, 'cuda', layout) for _ in range(2)]
             k.copy_(self.rand(*k.shape)); v.copy_(self.rand(*v.shape))
