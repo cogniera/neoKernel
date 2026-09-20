@@ -17,7 +17,7 @@ Submit and wait with the installed CLI. It already knows the event server, so
 most people only need `DRYFT_TOKEN`:
 
 ```sh
-export DRYFT_TOKEN=dryft_pat_...                   # API tokens
+export DRYFT_TOKEN=DRYFT_TOKEN_...                   # API tokens
 
 ../bin/dryft submit engine
 ../bin/dryft run <submission-id> --mode public --wait 3000
