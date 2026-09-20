@@ -122,8 +122,8 @@ class HandRolledKernelTests(unittest.TestCase):
 
     @torch.inference_mode() if GPU else (lambda f: f)
     def test_qk_rope_cache(self):
-        from kernels.elementwise import qk_rope_cache_out
-        from kernels.decode import cache_storage
+        from kernels.tree_ops import qk_rope_cache_out
+        from kernels.tree_decode import cache_storage
         from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm, apply_rotary_pos_emb
         qn, kn = [Qwen3RMSNorm(128, eps=1e-6).cuda().bfloat16() for _ in range(2)]
         qn.weight.copy_(self.rand(128)); kn.weight.copy_(self.rand(128))
@@ -162,23 +162,9 @@ class HandRolledKernelTests(unittest.TestCase):
             self.report(f'silu/{batch}/{fused}', out, ref, .03125)
 
     @torch.inference_mode() if GPU else (lambda f: f)
-    def test_skinny_gemm(self):
-        from kernels.gemm import skinny_mm
-        for n, k in ((6144, 2560), (2560, 4096), (19456, 2560), (2560, 9728)):
-            w = self.rand(n, k) * 0.02
-            for m in (1, 4, 16, 32):
-                x = self.rand(m, k)
-                out = torch.empty((m, n), device='cuda', dtype=torch.bfloat16)
-                skinny_mm(x, w.t(), out)
-                exact = torch.mm(x.float(), w.float().t())
-                # One BF16 rounding of an fp32 accumulation: within half an ulp of exact.
-                self.report(f'gemm/{n}x{k}/{m}', out, exact, .015625, .004)
-                torch.testing.assert_close(out.float(), torch.mm(x, w.t()).float(), atol=.03125, rtol=.008)
-
-    @torch.inference_mode() if GPU else (lambda f: f)
     def test_attention(self):
-        from kernels.attention import attention_out
-        from kernels.decode import cache_storage, DecodeBuffers
+        from kernels.tree_attention import attention_out
+        from kernels.tree_decode import cache_storage, TreeDecodeBuffers as DecodeBuffers
         import torch.nn.functional as F
         for batch, capacity, layout, tree in itertools.product((1, 4), (640, 2080), ('bhsd', 'bshd'), self.trees()):
             rows = batch * tree.nodes
@@ -225,7 +211,7 @@ class HandRolledKernelTests(unittest.TestCase):
     @torch.inference_mode() if GPU else (lambda f: f)
     def test_draft_accept_compact(self):
         from kernels.speculative import draft_out, accept_out, compact_out
-        from kernels.decode import cache_storage
+        from kernels.tree_decode import cache_storage
         vocab, batch, prompt, output, layers = 300, 3, 40, 24, 2
         for tree in self.trees():
             nodes, depth = tree.nodes, tree.max_depth
@@ -332,7 +318,8 @@ class HandRolledKernelTests(unittest.TestCase):
 
     @torch.inference_mode() if GPU else (lambda f: f)
     def test_layer_all_switch_combinations(self):
-        from kernels.decode import LayerWeights, DecodeBuffers, cache_storage
+        from kernels.weights import LayerWeights
+        from kernels.tree_decode import TreeDecodeBuffers as DecodeBuffers, cache_storage
         from kernels.tree import DraftTree
         from transformers import StaticCache
         from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer

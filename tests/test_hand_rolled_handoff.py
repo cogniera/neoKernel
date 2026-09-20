@@ -73,10 +73,12 @@ class HandRolledHandoffTests(unittest.TestCase):
         vocab = engine.model.config.vocab_size
         try:
             with torch.inference_mode():
-                variants = (('bhsd', 'fused'), ('bshd', 'fused'), ('bhsd', 'native'))
+                # 'single' forces one-node trees: the warmup-selected single-token graphs.
+                variants = (('bhsd', 'tree'), ('bshd', 'tree'), ('bhsd', 'single'))
                 for (layout, impl), shape in itertools.product(variants, ((1, 512, 32), (4, 2048, 32), (16, 512, 128))):
                     batch, length, output = shape
-                    module.DECODE_CONFIG.update(kv_layout=layout, prefill_impl=impl)
+                    module.DECODE_CONFIG.update(kv_layout=layout,
+                                                draft_nodes={1: 1} if impl == 'single' else original_config['draft_nodes'])
                     engine.shape = None
                     torch.manual_seed(391)
                     warm = torch.randint(100, vocab, (batch, length)).tolist()
@@ -102,7 +104,7 @@ class HandRolledHandoffTests(unittest.TestCase):
                     # sequence, two samples of each per shape.
                     for corpus_ids in corpora:
                         chunks = corpus_ids[:corpus_ids.numel() // length * length].view(-1, length)
-                        for sample in range(2 if impl == 'fused' and layout == 'bhsd' else 0):
+                        for sample in range(2 if impl == 'tree' and layout == 'bhsd' else 0):
                             rows = (torch.arange(batch) * 3 + sample * 7) % chunks.shape[0]
                             prompts.append(chunks[rows].cuda())
                     for sample, prompt in enumerate(prompts):
@@ -117,9 +119,10 @@ class HandRolledHandoffTests(unittest.TestCase):
                         self.assertEqual(len(steps), output)
                         ids = torch.tensor(steps, device='cuda').t().contiguous()
                         worst, agreement, first_bad = self.replay_margin(engine.model, prompt, ids)
+                        rounds = engine.rounds if engine.tree.nodes > 1 else output - 1
                         print(json.dumps(dict(test=f'handoff/{layout}/{impl}/{shape}/{sample}', max_margin=worst,
-                                              first_bad=first_bad, argmax_agreement=agreement, rounds=engine.rounds,
-                                              tokens_per_round=(output - 1) / max(1, engine.rounds),
+                                              first_bad=first_bad, argmax_agreement=agreement, rounds=rounds,
+                                              tokens_per_round=(output - 1) / max(1, rounds),
                                               nodes=engine.tree.nodes, seconds=elapsed,
                                               load_s=load_s, warmup_s=warmup_s)), flush=True)
                         self.assertLessEqual(worst, 2.0, f'first bad (sequence, position): {first_bad}')

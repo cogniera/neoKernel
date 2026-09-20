@@ -1,4 +1,4 @@
-"""Loaded weight views and reusable scratch for a hand-rolled Qwen3 layer.
+"""Reusable scratch for a hand-rolled Qwen3 layer over draft-tree rows.
 
 Every buffer holds batch * tree.nodes rows: row b*T+j is draft-tree node j of
 sequence b. With a one-node tree this is ordinary single-token decode.
@@ -6,13 +6,12 @@ sequence b. With a one-node tree this is ordinary single-token decode.
 
 import torch
 from kernels import CONFIG, TUNABLES
-from kernels.elementwise import norm_out, qk_rope_cache_out, silu_mul_out
-from kernels.attention import attention_out
-from kernels.gemm import skinny_mm
-from kernels.weights import LayerWeights
+from kernels.elementwise import norm_out, silu_mul_out
+from kernels.tree_ops import qk_rope_cache_out
+from kernels.tree_attention import attention_out
 
 
-class DecodeBuffers:
+class TreeDecodeBuffers:
     def __init__(self, batch, capacity, device, config=None, tree=None, scratch=True):
         from kernels.tree import DraftTree
         self.config = dict(CONFIG if config is None else config)
@@ -25,7 +24,7 @@ class DecodeBuffers:
         self.rows = rows
         def alloc(*shape):
             return torch.empty(shape, device=device, dtype=torch.bfloat16)
-        self.mm = skinny_mm if self.config.get('skinny_gemm', False) else (lambda a, b, out: torch.mm(a, b, out=out))
+        self.mm = lambda a, b, out: torch.mm(a, b, out=out)
         self.x = alloc(rows, 2560)
         self.norm = alloc(rows, 2560)
         self.branch = alloc(rows, 2560)
@@ -74,38 +73,6 @@ class DecodeBuffers:
 
     def attend(self, k, v, base):
         attention_out(self.q, k, v, base, self.tree, self.attn, self.partial, self.lse)
-
-
-class PrefillTree:
-    """Prompt rows as one chain: token p of every sequence sits at position and slot p."""
-
-    def __init__(self, length, device):
-        self.nodes = length
-        self.max_depth = length - 1
-        self.depth = torch.arange(length, device=device, dtype=torch.int32)
-
-
-class PrefillBuffers(DecodeBuffers):
-    """The decode layer over batch * prompt rows with causal FlashAttention reading the cache.
-
-    K and V are consumed straight from the cache slots the fused RoPE kernel
-    wrote, with the eight KV heads shared by their four query heads inside the
-    kernel, so no 32-head copy of the prompt's keys and values is ever made.
-    """
-
-    def __init__(self, batch, prompt_length, device, config=None):
-        super().__init__(batch, prompt_length, device, config, PrefillTree(prompt_length, device), scratch=False)
-        self.batch, self.length = batch, prompt_length
-
-    def attend(self, k, v, base):
-        import torch.nn.functional as F
-        from torch.nn.attention import SDPBackend, sdpa_kernel
-        query = self.q.view(self.batch, self.length, 32, 128).transpose(1, 2)
-        with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-            out = F.scaled_dot_product_attention(query, k[:, :, :self.length], v[:, :, :self.length],
-                                                 dropout_p=0.0, is_causal=self.length > 1,
-                                                 scale=128 ** -0.5, enable_gqa=True)
-        self.attn.copy_(out.transpose(1, 2).reshape(self.rows, 32, 128))
 
 
 def cache_storage(batch, capacity, device, layout, layers=1):
