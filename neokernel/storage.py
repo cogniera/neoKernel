@@ -3,6 +3,7 @@
 import hashlib
 import json
 import subprocess
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import asdict
@@ -25,7 +26,10 @@ def git_sha() -> str:
 def write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    with temporary.open('w', encoding='utf-8', newline='\n') as stream:
+        stream.write(json.dumps(value, indent=2, allow_nan=False) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
     temporary.replace(path)
 
 

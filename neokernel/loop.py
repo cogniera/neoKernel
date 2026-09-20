@@ -1,4 +1,4 @@
-"""Bounded proposal loop with file snapshots. Never commits, merges, or pushes."""
+"""Bounded proposal loop with judged, journaled Git transactions. Never pushes."""
 
 import json
 import hashlib
@@ -15,6 +15,9 @@ from agent.package import package
 from .guard import GuardError, check
 from .schema import PUBLIC, Proposal, PROPOSAL_SCHEMA, select_workloads
 from .storage import ROOT, RESULTS, append_log, read_log, restore, snapshot, write_json
+from .transaction import Transaction, crash
+from .accounting import SpendLedger, SpendLimit
+from .judge import keep_decision
 
 PLAYBOOK = ["static_kv_cache", "bypass_wrapper", "cuda_graph_decode", "concat_qkv", "concat_gate_up",
             "prefill_cuda_graph", "fused_rmsnorm", "fused_qk_norm_rope_kv_write", "fused_silu_mul",
@@ -107,16 +110,28 @@ def context(engine_dir: Path, profile: dict, records: list[dict]) -> list[dict]:
     return [{"role": "system", "content": static}, {"role": "user", "content": json.dumps(dynamic)}]
 
 
-def retry_call(call):
-    """Retry rate limits and server failures at most five times, with jitter."""
-    for attempt in range(5):
+def retry_call(call, allow_format_error=False):
+    """Transient backoff; persistent API outages pause five minutes and retry."""
+    attempt = 0
+    while True:
         try:
             return call()
         except Exception as exc:
             status = getattr(exc, "status_code", None)
-            if (status != 429 and not (isinstance(status, int) and 500 <= status < 600)) or attempt == 4:
+            if isinstance(exc, SpendLimit):
                 raise
-            time.sleep(min(30, 2**attempt) + random.random())
+            if allow_format_error and status in {400, 422} and any(
+                    term in str(exc).lower() for term in ['response_format', 'json_schema', 'structured output']):
+                raise  # structured-output fallback / malformed request
+            if status is None and not type(exc).__name__.startswith(('API', 'Connect', 'ReadTimeout')):
+                raise
+            if attempt < 4 and (status == 429 or (isinstance(status, int) and 500 <= status < 600)):
+                time.sleep(min(30, 2**attempt) + random.random())
+                attempt += 1
+            else:
+                print('Baseten unavailable; pausing five minutes before retry.', flush=True)
+                time.sleep(300)
+                attempt = 0
 
 
 class Proposer:
@@ -127,11 +142,32 @@ class Proposer:
         self.client = OpenAI(base_url="https://inference.baseten.co/v1", api_key=os.environ["BASETEN_API_KEY"],
                              max_retries=0, timeout=120)
         self.model = model
+        self.spend = SpendLedger()
         available = retry_call(self.client.models.list)
         if model not in {m.id for m in available.data}:
             raise ValueError(f"model slug is not present in /v1/models: {model}")
         print(f'Confirmed GET /v1/models: {model}', flush=True)
         self.structured = True
+
+    def completion(self, messages, response_format):
+        # UTF-8 byte count is a conservative token upper bound, plus framing/schema.
+        input_bound = len(json.dumps(messages, ensure_ascii=False).encode('utf-8')) + len(json.dumps(response_format).encode()) + 4096
+        max_tokens = 16384
+        # Baseten GLM-5.2 pricing: $1.40/M input, $4.40/M output (2026-09-20).
+        bound = (input_bound * 1.4 + max_tokens * 4.4) / 1e6
+        self.spend.reserve_amount('Baseten', bound, 'GLM-5.2 proposal')
+        try:
+            result = self.client.chat.completions.create(model=self.model, messages=messages,
+                                                        response_format=response_format, max_tokens=max_tokens)
+        except Exception as exc:
+            if getattr(exc, 'status_code', None) in {400, 401, 403, 404, 422, 429}:
+                self.spend.settle(0, operation='rejected API request')
+            # Unknown/server failures retain their reservation; they may have generated tokens.
+            raise
+        usage = result.usage
+        amount = (usage.prompt_tokens * 1.4 + usage.completion_tokens * 4.4) / 1e6 if usage else bound
+        self.spend.settle(amount, operation='GLM-5.2 proposal')
+        return result
 
     def propose(self, messages: list[dict]) -> Proposal:
         last_error = None
@@ -140,14 +176,12 @@ class Proposer:
                                                                          "schema": PROPOSAL_SCHEMA}}
                                if self.structured else {"type": "json_object"})
             try:
-                result = retry_call(lambda: self.client.chat.completions.create(model=self.model, messages=messages,
-                                                                                response_format=response_format))
+                result = retry_call(lambda: self.completion(messages, response_format), allow_format_error=self.structured)
             except Exception as exc:
                 if self.structured and getattr(exc, "status_code", None) in {400, 422} and any(
                         term in str(exc).lower() for term in ["response_format", "json_schema", "structured output"]):
                     self.structured = False
-                    result = retry_call(lambda: self.client.chat.completions.create(model=self.model, messages=messages,
-                                                                                    response_format={"type": "json_object"}))
+                    result = retry_call(lambda: self.completion(messages, {"type": "json_object"}))
                 else:
                     raise
             try:
@@ -186,78 +220,93 @@ def validate_proposal(proposal: Proposal, items: list[str], records: list[dict])
         raise ValueError("reasoning exceeds three sentences")
 
 
+def run_experiment(transaction, remote, baseline, workloads, files, hypothesis='', proposal=None):
+    engine_dir = transaction.root / 'engine'
+    before = snapshot(engine_dir)
+    changed, result, guard_status, note = [], None, 'not_run', ''
+    try:
+        changed = apply_proposal(engine_dir, files)
+        check(engine_dir)
+        guard_status = 'pass'
+    except (GuardError, ValueError) as exc:
+        guard_status, note = 'fail', str(exc)
+    if guard_status == 'pass':
+        checked = remote.bench(package(engine_dir), PUBLIC, 1, correctness_only=True)
+        keep_decision(checked, baseline)  # Surface infrastructure failure codes even on L4.
+        if not checked['eligible']:
+            result, note = checked, 'correctness check failed'
+        else:
+            result = remote.bench(package(engine_dir), workloads, 3)
+            result['gpu_seconds'] += checked.get('gpu_seconds', 0)
+    kept, delta = keep_decision(result, baseline) if result else (False, None)
+    note = note or ('judge kept improvement above 1 percent' if kept else 'gates failed or improvement did not exceed 1 percent')
+    diff = generated_diff(before, snapshot(engine_dir))
+    row = transaction.row(result, kept, delta, guard_status, note, diff, changed)
+    if proposal:
+        row['proposal_sha256'] = proposal_digest(proposal.files)
+    transaction.finish(row)
+    print(f"Experiment {row['id']}: {row['item']}: {'kept' if kept else 'reverted'}; delta={delta}; {note}", flush=True)
+    return result if kept else baseline
+
+
+def measured_baseline(remote, engine_dir, workloads):
+    # A failing current-engine sample is a candidate failure, not a harness crash.
+    while True:
+        baseline = remote.bench(package(engine_dir), workloads, 3)
+        keep_decision(baseline, baseline)
+        if baseline['eligible']:
+            return baseline
+        print('Current-engine baseline failed gates; preserving main and remeasuring.', flush=True)
+
+
 def run_loop(args, remote, proposer=None) -> int:
-    engine_dir = ROOT / "engine"
-    items = args.items.split(",") if args.items else PLAYBOOK
+    transaction = Transaction(ROOT, RESULTS)
+    transaction.startup(getattr(args, 'resume', False))
+    items = args.items.split(',') if args.items else PLAYBOOK
     if not items or any(i not in PLAYBOOK for i in items):
-        raise ValueError("unknown playbook item")
+        raise ValueError('unknown playbook item')
     workloads = select_workloads(args.workloads)
-    remote.reserve(3600)
-    proposer = proposer or Proposer(args.model)
-    baseline = remote.bench(package(engine_dir), workloads, 3)
-    if not baseline["eligible"]:
-        append_log(baseline, proposer="agent", item="baseline", note="baseline failed gates")
-        return 1
-    best_score = baseline["geomean_tps"]
-    append_log(baseline, proposer="agent", item="baseline", kept=True, note="measured current tree before proposals")
-    for step in range(args.steps):
-        records = read_log()
-        profile = remote.profile(package(engine_dir), workloads[0])
-        messages = context(engine_dir, profile, records)
-        proposal = None
-        for retry in range(2):
-            try:
-                proposed = proposer.propose(messages)
-                validate_proposal(proposed, items, records)
-                proposal = proposed
-                break
-            except ValueError as exc:
-                messages.append({"role": "user", "content": str(exc) + "; propose a valid alternative."})
-        if proposal is None:
-            append_log(None, proposer="agent", item="proposal_rejected", note=messages[-1]["content"])
-            continue
-        before = snapshot(engine_dir)
-        iteration_id = max((r["id"] for r in records), default=0) + 1
-        for name, data in before.items():
-            path = RESULTS / "snapshots" / str(iteration_id) / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-        write_json(RESULTS / "proposals" / f"{iteration_id}.json", vars(proposal))
-        kept, result, files, guard_status, note = False, None, [], "not_run", ""
-        diff = ""
-        try:
-            files = apply_proposal(engine_dir, proposal.files)
-            diff = generated_diff(before, snapshot(engine_dir))
-            check(engine_dir)
-            guard_status = "pass"
-            checked = remote.bench(package(engine_dir), PUBLIC, 1, correctness_only=True)
-            if not checked["eligible"]:
-                result, note = checked, "correctness check failed"
-            else:
-                result = remote.bench(package(engine_dir), workloads, 3)
-                result["gpu_seconds"] += checked.get("gpu_seconds", 0) + profile.get("gpu_seconds", 0)
-                kept = result["eligible"] and result["geomean_tps"] > best_score * 1.01
-                if kept:
-                    best_score = result["geomean_tps"]
-                    note = "kept in working tree; no commit"
-                else:
-                    note = "gates failed or improvement did not exceed 1 percent"
-        except GuardError as exc:
-            guard_status, note = "fail", str(exc)
-        except (ValueError, RuntimeError) as exc:
-            note = str(exc)
-        except KeyboardInterrupt:
-            note = "interrupted; snapshot restored"
-            raise
-        finally:
-            if not kept:
-                restore(engine_dir, before)
-            row = append_log(result, proposer="agent", item=proposal.item, hypothesis=proposal.hypothesis,
-                             kept=kept, note=note, files_changed=files, guard=guard_status,
-                             patch_sha256=hashlib.sha256(diff.encode()).hexdigest() if diff else None,
-                             proposal_sha256=proposal_digest(proposal.files), diff=diff)
-            print(f"Experiment {row['id']}: {proposal.item}: {'kept' if kept else 'reverted'}; {note}")
-        attended = args.attended if args.attended is not None else step < 5
-        if attended:
-            input("Press Enter to continue: ")
-    return 0
+    engine_dir = ROOT / 'engine'
+    try:
+        proposer = proposer or Proposer(args.model)
+        baseline = measured_baseline(remote, engine_dir, workloads)
+        night_path = RESULTS / 'night_budget.json'
+        start_id = json.loads(night_path.read_text())['start_log_id'] if night_path.exists() else 0
+        done = sum(r.get('proposer') == 'agent' and r['id'] > start_id for r in read_log(RESULTS)) if getattr(args, 'resume', False) else 0
+        for step in range(done, args.steps):
+            records = read_log(RESULTS)
+            # Use available profile data; new GPU work goes through judge calls only.
+            profile_path = RESULTS / 'profile.json'
+            profile = json.loads(profile_path.read_text()) if profile_path.exists() else {}
+            messages = context(engine_dir, profile, records)
+            transaction.begin('proposal_rejected', 'agent')
+            proposal = None
+            for retry in range(2):
+                try:
+                    proposed = proposer.propose(messages)
+                    validate_proposal(proposed, items, records)
+                    proposal = proposed
+                    break
+                except SpendLimit:
+                    raise
+                except ValueError as exc:
+                    messages.append({'role': 'user', 'content': str(exc) + '; propose a valid alternative.'})
+            if proposal is None:
+                row = transaction.row(None, False, None, 'not_run', messages[-1]['content'], '')
+                transaction.finish(row)
+                continue
+            transaction.state.update(item=proposal.item, hypothesis=proposal.hypothesis)
+            transaction.save()
+            write_json(RESULTS / 'proposals' / f"{transaction.state['id']}.json", vars(proposal))
+            baseline = run_experiment(transaction, remote, baseline, workloads, proposal.files, proposal=proposal)
+        return 0
+    except SpendLimit as exc:
+        if transaction.state:
+            before = snapshot(RESULTS / 'snapshots' / str(transaction.state['id']) / 'before')
+            row = transaction.row(None, False, None, 'not_run', str(exc), generated_diff(before, snapshot(engine_dir)))
+            transaction.finish(row)
+        print(str(exc), flush=True)
+        return 0
+    except BaseException:
+        crash(RESULTS)
+        raise

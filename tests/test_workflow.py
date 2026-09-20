@@ -15,7 +15,7 @@ from neokernel.profile import aggregate_events
 from neokernel.schema import Proposal, select_workloads
 from neokernel.storage import Budget, append_log, read_log, restore, seed_native, snapshot
 from neokernel.sweep import points, set_tunables, tunables, wire_rmsnorm
-from neokernel.accounting import SpendLedger, estimate_usd
+from neokernel.accounting import SpendLedger, estimate_usd, GPU_IDLE_S
 
 
 class WorkflowTests(unittest.TestCase):
@@ -68,7 +68,7 @@ class WorkflowTests(unittest.TestCase):
             ledger = SpendLedger(Path(tmp))
             self.assertLess(ledger.reserve("L4"), ledger.reserve("H100"))
             record = ledger.record("L4", time.perf_counter(), 10, "test", True)
-            self.assertAlmostEqual(record["calls"][0]["estimated_usd"], estimate_usd("L4", 12))
+            self.assertAlmostEqual(record["calls"][-1]["estimated_usd"], estimate_usd("L4", 10 + GPU_IDLE_S))
             (Path(tmp)/"setup.json").write_text(json.dumps({"estimated_usd": 2.9}))
             with self.assertRaises(ValueError):
                 ledger.reserve("L4")

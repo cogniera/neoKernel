@@ -1,50 +1,36 @@
-# neoKernel v1
+# neoKernel local research loop
 
-An opt-in research harness around the untouched Dryft starter. Nothing under neokernel/ is submitted. No command commits, merges, or pushes. Auto and sweep keep winning source in the working tree and restore unsuccessful experiments from snapshots.
+Run orchestration on the laptop with Python 3.11. GPU work in auto and sweep is restricted to Modal judge calls returning JSON. The engine archive contains only engine source. The harness never pushes.
 
-## Offline use
-
-From the repository root:
+## Overnight commands
 
 ```powershell
-python -m neokernel --help
-python -m neokernel guard
-python -m neokernel log
-python -m unittest discover -s tests -v
+py -3.11 -m unittest discover -s tests -v
+py -3.11 -m neokernel sweep
+py -3.11 -m neokernel auto --steps 30
+# After a killed process or sleep interruption:
+py -3.11 -m neokernel auto --steps 30 --resume
 ```
 
-The guard and arithmetic tests use the standard library. Tensor replay tests run on CPU when torch and transformers==4.51.3 are installed; otherwise unittest reports them as skipped. No test needs credentials or contacts an API. Python 3.11 is the deployment target.
+Sweep defaults to public-0 and public-2, with ten numeric coordinate trials over scalar TUNABLES. List-valued TUNABLES still support Cartesian search. Auto defaults to all six local workloads. Local h-a/h-b/h-c are proxy shapes, not disclosed official hidden shapes. Neither command pauses for approval; --attended is retained only for command-line compatibility.
 
-## Remote setup and commands
+Both commands require a clean main branch before remote dispatch. Every trial owns exp/<id>. Only the judge's passing result with improvement strictly greater than 1% against the matching workload baseline permits a keep. A keep commits scoped engine files after a credential scan, fast-forward merges main, tags kept-<id>, writes results/best.json and copies results to results_backup/<id>/. Results live under neokernel/; neither results nor backups are committed.
 
-The following commands contact external services and are for later authorized use. Install neokernel/requirements.txt, authenticate Modal, and explicitly download the pinned weights using download-weights. The CLI never installs packages or downloads weights automatically. Configure BASETEN_API_KEY in the environment before auto. Do not put credentials inside engine/.
+Reverted candidates are preserved under results/snapshots/<id>/engine/, with original files under before/ and a diff in log.jsonl. The durable transaction journal makes log finalization idempotent. --resume snapshots and discards an interrupted, unmerged experiment; if the keep merge already happened, it completes the tag/log/best/backup instead of undoing that accepted commit. Unknown changes outside engine are preserved and block recovery. A process lock prevents simultaneous loops.
+
+Candidate correctness, latency, memory, timing-spread and other gate failures are ordinary reverts. A harness exception writes results/CRASH.txt and leaves its branch, source and journal in place. A clean budget stop snapshots and reverts an unjudged candidate. No gate is relaxed.
+
+The first command creates results/night_budget.json with an $8 incremental ceiling shared by sweep, auto, Modal and Baseten. Reservations are persisted before dispatch. Unresolved reservations remain charged after termination. Each L4/H100 call reserves 900 seconds plus startup and 60 seconds idle; containers scale down after 60 idle seconds. Baseten uses conservative input bounds and a 16,384-token output cap, then settles against reported usage at GLM-5.2's published $1.40/M input and $4.40/M output rates. These are conservative local estimates, not a provider-side invoice cap. Dispatch stops early if its reservation cannot fit. The ledger is not reset on resume.
+
+Baseten 429/5xx responses use exponential backoff; persistent API failures pause five minutes and retry. Structured-output incompatibility falls back to JSON mode. Set BASETEN_API_KEY only in the environment, never in source. The credential scan checks the complete index before every experiment commit.
+
+An hourly local worker appends time, auto steps, kept ids, best geomean and spend to results/NIGHT.md. results/MORNING.md contains the final log count, keeps, best record, spend by tier, crash text, saved power settings and operator-only freeze/push commands. GPU tests are skipped locally; CPU tests run without network calls.
 
 ```powershell
-python -m neokernel download-weights
-python -m neokernel check --workloads public
-python -m neokernel bench --workloads all --samples 3
-python -m neokernel bench --workloads public --refresh-native
-python -m neokernel profile --workload public-0
-python -m neokernel gauge --workload public-0
-python -m neokernel race --a HEAD --b current --workload public-0
-python -m neokernel sweep --steps 3 --wire-rmsnorm --max-gpu-minutes 180
-python -m neokernel auto --steps 1 --attended --max-gpu-minutes 300
-python -m neokernel log --last 15 --kept
-python -m neokernel freeze --out ./frozen-v1 --workloads all
+py -3.11 -m neokernel guard
+py -3.11 -m neokernel report
+py -3.11 -m neokernel log --last 15
+py -3.11 -m neokernel freeze --out neokernel/results/review_freeze --workloads all
 ```
 
-Selections are public, hidden, all, or comma-separated workload names. Hidden means guessed shapes, not the private leaderboard workloads. check enforces output correctness, deadlines, and memory; bench additionally enforces latency, spread, and physics estimates. Native and candidate run sequentially in alternating order for each workload. Native medians are cached only within that container; --refresh-native repeats them. Latency gates use those local native medians. Official numbers appear only in calibration comparisons and host correction factors. Bench records child CPU time and parent-received pipe latency; --transport binary selects fixed-size token frames instead of flushed JSON lines.
-
-Every remote invocation has a 3,600-second timeout. Search budgets conservatively reserve that entire possible allocation before dispatch and debit reported GPU seconds on completion. Failed or interrupted remote calls charge the full reservation because their actual usage is unknown. This intentionally refuses dispatch with fewer than 60 GPU minutes remaining. It is a dispatch budget, not a provider billing cap: idle time, image startup, and asynchronous cancellation can differ from reported time. No other work is scheduled automatically.
-
-race uses the same secret prompt seed for both candidates. It streams them sequentially on one H100 to avoid timing contamination from GPU contention, then displays both streams and their profile bars. Display is sequence zero for batched workloads. It is a demo, not a correctness certificate or a keep decision.
-
-The RMSNorm sweep hook is opt-in and initially staged in a temporary copy. It does not edit the starter merely by importing or installing this harness. Existing kernels can expose a literal TUNABLES dict with numeric lists in kernels/__init__.py; sweep replaces the assignment with scalar values without discarding other module content. A successful point becomes the live configuration. Preserve original ranges separately if repeated searches need them.
-
-The agent returns a files mapping containing complete replacement contents. Omitted paths are unchanged; an empty string deletes only a kernel file. The main engine cannot be deleted. Paths are validated before writing, and Git generates the diff from before/after snapshots, including new and deleted files, for each log entry. No index or commit changes are made. On Ctrl-C, the in-flight live experiment is restored. Source snapshots are also persisted under results/snapshots/ for inspection after a hard process termination. Hard termination cannot execute Python cleanup; restore manually from that snapshot if needed.
-
-freeze requires a new output directory, public correctness checks, and a five-sample benchmark for the selected workloads. It writes engine/ and FREEZE.json only after passing. The output is for review or a later submission; freeze does not submit it.
-
-See [calibration status](../docs/CALIBRATION.md) and [design and limitations](../docs/DESIGN.md). External acceptance, calibration, and one live agent iteration remain pending.
-
-The attended Modal dollar ceiling is $3 cumulative until an agent optimization passes the judge and is kept, then $6 cumulative. Baseline measurements do not raise the ceiling. Each GPU call reserves its maximum allowed cost before dispatch.
+Freeze performs public L4 correctness followed by five H100 samples per selected workload. Its output directory must not already exist. It never submits or pushes.

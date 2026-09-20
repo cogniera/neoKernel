@@ -98,43 +98,62 @@ class FusedRMSNorm(torch.nn.Module):
     kernel.write_text(text, encoding="utf-8")
 
 
+def numeric_candidates(source, limit, randomized=False, seed=0):
+    space = tunables(source)
+    if any(len(v) > 1 for v in space.values()):
+        return list(points(space, limit, randomized, seed))
+    base = {k: v[0] for k, v in space.items()}
+    # Coordinate sweep: preserve scalar source, vary one numeric knob at a time.
+    candidates = []
+    keys = sorted(base, key=lambda k: (not k.startswith('attention.'), not k.startswith('merge.'), k))
+    for key in keys:
+        value = base[key]
+        options = [value // 2, value * 2] if key.endswith('BLOCK') else ([2, 4, 8] if key.endswith('num_warps') else [1, 2, 3])
+        for choice in options:
+            minimum = 4096 if key == 'norm.BLOCK' else 128 if key == 'qk.BLOCK' else 1
+            if choice != value and choice >= minimum:
+                candidates.append({**base, key: choice})
+    if randomized:
+        random.Random(seed).shuffle(candidates)
+    return candidates[:limit]
+
+
 def run_sweep(args, remote) -> int:
-    live = ROOT / "engine"
-    original = snapshot(live)
+    from .loop import measured_baseline, run_experiment, generated_diff
+    from .transaction import Transaction, crash
+    from .accounting import SpendLimit
+    from .storage import RESULTS
+    transaction = Transaction(ROOT, RESULTS)
+    transaction.startup(getattr(args, 'resume', False))
+    live = ROOT / 'engine'
     workloads = select_workloads(args.workloads)
-    best_state = original
-    baseline = remote.bench(package(live), workloads, 2)
-    if not baseline["eligible"]:
-        append_log(baseline, proposer="sweep", item="baseline", note="baseline failed gates")
-        return 1
-    best_score = baseline["geomean_tps"]
-    append_log(baseline, proposer="sweep", item="baseline", kept=True, note="measured current tree")
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "engine"
-        restore(root, original)
-        if args.wire_rmsnorm:
-            wire_rmsnorm(root)
-        init = root / "kernels" / "__init__.py"
-        source = init.read_text(encoding="utf-8")
-        candidates = list(points(tunables(source), args.steps, args.random, args.seed))
-        payloads, states = [], []
-        for point in candidates:
-            init.write_text(set_tunables(source, point), encoding="utf-8")
-            check(root)
-            payloads.append(package(root))
-            states.append(snapshot(root))
-        # One remote invocation reuses the reference model and container for all points.
-        results = remote.many(payloads, workloads, 2, validate_rmsnorm=args.wire_rmsnorm)
-        winner = None
-        for i, result in enumerate(results):
-            if result["eligible"] and result["geomean_tps"] > best_score:
-                best_score, best_state, winner = result["geomean_tps"], states[i], i
-        for i, result in enumerate(results):
-            append_log(result, proposer="sweep", item="numeric_tunables", hypothesis=str(candidates[i]),
-                       kept=i == winner, files_changed=["engine/kernels/__init__.py"],
-                       note=f"point {candidates[i]}; {'best passing improvement' if i == winner else 'not kept'}")
-    if snapshot(live) != original:
-        raise ValueError("live engine changed during sweep; refusing to overwrite it")
-    restore(live, best_state)
-    print(f"Sweep: {len(candidates)} points; best={best_score:.2f} tok/s; working tree only")
-    return 0
+    try:
+        baseline = measured_baseline(remote, live, workloads)
+        original = snapshot(live)
+        with tempfile.TemporaryDirectory() as tmp:
+            staged = Path(tmp) / 'engine'
+            restore(staged, original)
+            if args.wire_rmsnorm:
+                wire_rmsnorm(staged)
+            source = (staged / 'kernels' / '__init__.py').read_text(encoding='utf-8')
+            candidates = numeric_candidates(source, args.steps, args.random, args.seed)
+            for point in candidates:
+                (staged / 'kernels' / '__init__.py').write_text(set_tunables(source, point), encoding='utf-8')
+                state = snapshot(staged)
+                current = snapshot(live)
+                files = {'engine/' + name: data.decode('utf-8') for name, data in state.items() if current.get(name) != data}
+                if not files:
+                    continue
+                transaction.begin('numeric_tunables', 'sweep', str(point))
+                baseline = run_experiment(transaction, remote, baseline, workloads, files)
+        print(f"Sweep finished: best={baseline['geomean_tps']:.2f} tok/s", flush=True)
+        return 0
+    except SpendLimit as exc:
+        if transaction.state:
+            before = snapshot(RESULTS / 'snapshots' / str(transaction.state['id']) / 'before')
+            transaction.finish(transaction.row(None, False, None, 'not_run', str(exc), generated_diff(before, snapshot(live))))
+        print(str(exc), flush=True)
+        return 0
+    except BaseException:
+        crash(RESULTS)
+        raise

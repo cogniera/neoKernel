@@ -386,6 +386,24 @@ def native_record(w: Workload, measurement, model, transport: str) -> dict:
             "child_diagnostics": records[0].child_diagnostics}
 
 
+def keep_decision(result: dict, baseline: dict) -> tuple[bool, float | None]:
+    """Only the judge grants keep; compare identical measured workload sets."""
+    import math
+    allowed = {'incorrect_output', 'candidate_error', 'timeout', 'load_budget',
+               'latency_limit', 'memory_limit', 'unstable_timing', 'physics_violation'}
+    for run in (baseline, result):
+        for w in run.get('workloads', []):
+            if w.get('failure_code') and w['failure_code'] not in allowed:
+                raise RuntimeError('Harness failure: ' + str(w['failure_code']))
+    score, previous = result.get('geomean_tps'), baseline.get('geomean_tps')
+    signature = lambda run: sorted((w['name'], w.get('batch'), w.get('S'), w.get('N')) for w in run.get('workloads', []))
+    passed = bool(result.get('eligible') and baseline.get('eligible') and result.get('workloads')
+                  and signature(result) == signature(baseline)
+                  and all(w.get('passed') and w.get('gates') and all(w['gates'].values()) for w in result['workloads']))
+    delta = (score / previous - 1) * 100 if score and previous and math.isfinite(score) and math.isfinite(previous) and previous > 0 else None
+    return bool(passed and delta is not None and delta > 1.0 and score > previous * 1.01), delta
+
+
 def evaluate(engine_dir: Path, model_path: str, workloads: list[Workload], samples: int,
              model, tokenizer, native: dict, correctness_only=False, prompt_seed=None,
              baseline_dir: Path | None = None, transport="json", refresh_native=False) -> RunResult:

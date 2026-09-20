@@ -13,7 +13,7 @@ from pathlib import Path
 
 from agent.package import package
 from .guard import GuardError, check
-from .accounting import GPU_TIMEOUT_S, SpendLedger
+from .accounting import GPU_TIMEOUT_S, SpendLedger, SpendLimit
 from .calibration import equivalent_estimates, load_calibration, refresh_host_factors
 from .schema import PUBLIC, select_workloads
 from .storage import ROOT, RESULTS, Budget, append_log, git_sha, read_log, save_run, seed_native, write_json
@@ -144,7 +144,10 @@ class Remote:
                                                       transport=transport or (load_calibration() or {}).get("transport", "json"))
         except BaseException:
             self.charge(GPU_TIMEOUT_S)
-            self.spend.record(tier, started, None, "check" if correctness_only else "bench", False)
+            try:
+                self.spend.record(tier, started, None, "check" if correctness_only else "bench", False)
+            except SpendLimit:
+                pass  # Preserve the original harness failure and its traceback.
             raise
         self.native = result["native"]
         self.charge(result["gpu_seconds"])
@@ -155,18 +158,9 @@ class Remote:
         return result
 
     def many(self, payloads, workloads, samples=2, validate_rmsnorm=False):
-        self.reserve(3600)
-        try:
-            results = self.api.judge_many.remote(payloads, [asdict(w) for w in workloads], samples, False, self.native,
-                                                validate_rmsnorm=validate_rmsnorm)
-        except BaseException:
-            self.charge(3600)
-            raise
-        for payload, result in zip(payloads, results, strict=True):
-            self.native = result["native"]
-            save_run(result, payload)
-            self.charge(result["gpu_seconds"])
-        return results
+        if validate_rmsnorm:
+            raise ValueError('Use the tested staged sweep for RMSNorm integration')
+        return [self.bench(payload, workloads, samples) for payload in payloads]
 
     def profile(self, payload, workload):
         self.reserve(GPU_TIMEOUT_S)
@@ -176,7 +170,10 @@ class Remote:
             result = self.api.profile_remote.remote(payload, asdict(workload))
         except BaseException:
             self.charge(GPU_TIMEOUT_S)
-            self.spend.record("L4", started, None, "profile", False)
+            try:
+                self.spend.record("L4", started, None, "profile", False)
+            except SpendLimit:
+                pass
             raise
         self.charge(result.get("gpu_seconds", 0))
         write_json(RESULTS / "profile.json", result)
@@ -241,7 +238,7 @@ def parser():
     commands.add_parser("download-weights", help="explicit one-time Modal checkpoint download")
     for name in ["check", "bench", "freeze", "auto", "sweep"]:
         cmd = commands.add_parser(name)
-        cmd.add_argument("--workloads", default="all" if name in {"auto", "sweep"} else "public")
+        cmd.add_argument("--workloads", default="public-0,public-2" if name == 'sweep' else "all" if name == 'auto' else "public")
         if name == "bench":
             cmd.add_argument("--samples", type=int, default=3)
             cmd.add_argument("--refresh-native", action="store_true")
@@ -249,11 +246,13 @@ def parser():
         if name == "freeze":
             cmd.add_argument("--out", type=Path, required=True)
         if name in {"auto", "sweep"}:
-            cmd.add_argument("--max-gpu-minutes", type=float, default=120)
+            cmd.add_argument("--max-gpu-minutes", type=float, default=10000)
             cmd.add_argument("--steps", type=int, default=1 if name == "auto" else 10)
+            cmd.add_argument('--resume', action='store_true')
         if name == "auto":
             cmd.add_argument("--model", default="zai-org/GLM-5.2")
-            cmd.add_argument("--attended", action=argparse.BooleanOptionalAction, default=None)
+            cmd.add_argument("--attended", action=argparse.BooleanOptionalAction, default=False,
+                             help='legacy flag; overnight mode has no approval pauses')
             cmd.add_argument("--items")
         if name == "sweep":
             cmd.add_argument("--random", action="store_true")
@@ -290,7 +289,8 @@ def main(argv=None) -> int:
                   [[r["id"], r["ts"], r["sha"][:8], r["proposer"], r["item"], fmt(r["geomean_tps"]),
                     fmt(r["delta_pct"]), r["kept"], r["note"]] for r in (records[-args.last:] if args.last > 0 else [])])
             return 0
-        check(ROOT / "engine")
+        if args.command not in {'auto', 'sweep'}:
+            check(ROOT / "engine")
         if args.command == "guard":
             print("PASS: engine source guard")
             return 0
@@ -305,8 +305,22 @@ def main(argv=None) -> int:
         if args.command in {"auto", "sweep"}:
             from .loop import run_loop
             from .sweep import run_sweep
-            with Remote(Budget(args.max_gpu_minutes)) as remote:
-                return run_loop(args, remote) if args.command == "auto" else run_sweep(args, remote)
+            from .transaction import Transaction, crash
+            from .night import exclusive, night_watch, morning
+            with exclusive():
+                # Recovery precedes guard and imports/remote dispatch.
+                Transaction(ROOT, RESULTS).startup(args.resume)
+                with night_watch():
+                    try:
+                        check(ROOT / 'engine')
+                        with Remote(Budget(args.max_gpu_minutes)) as remote:
+                            return run_loop(args, remote) if args.command == 'auto' else run_sweep(args, remote)
+                    except SpendLimit as exc:
+                        print(str(exc), flush=True)
+                        return 0
+                    except BaseException:
+                        crash(RESULTS)
+                        raise
         workloads = select_workloads(getattr(args, "workloads", "public"))
         payload = package(ROOT / "engine")
         with Remote() as remote:
@@ -346,7 +360,7 @@ def main(argv=None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("Interrupted; in-flight experiment restored.", file=sys.stderr)
+        print("Interrupted; experiment preserved. Use auto --resume.", file=sys.stderr)
         return 130
 
 

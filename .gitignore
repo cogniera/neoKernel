@@ -7,3 +7,4 @@ __pycache__/
 *.tar.gz
 .DS_Store
 neokernel/results/
+neokernel/results_backup/
