@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "units": {
+    "ttft_ms": "milliseconds",
+    "tpot_ms": "milliseconds",
+    "tps": "output tokens per second",
+    "memory_gib": "GiB"
+  },
+  "note": "Hand-kept official evidence. Ranks are snapshots. Public workload measurements are not hidden-workload scores. Null means unavailable, never zero. Run pages were read without starting any runs. Screenshot capture was unavailable (Chrome CDP timeout); no screenshot is claimed as evidence.",
+  "runs": [
+    {
+      "run_id": "4877cddd",
+      "label": "native",
+      "score": 217.3,
+      "rank": 12,
+      "source": "Run page verified through Chrome on 2026-09-20 UTC; rank is the historical snapshot supplied by the user.",
+      "workloads": {
+        "public-0": {
+          "ttft_ms": 22.01,
+          "tpot_ms": 17.41,
+          "tps": 57.0,
+          "memory_gib": 9.57,
+          "batch_time_ms": 561.65,
+          "result": "passed",
+          "latency": "pass"
+        },
+        "public-1": {
+          "ttft_ms": 202.79,
+          "tpot_ms": 21.01,
+          "tps": 150.0,
+          "memory_gib": 11.44,
+          "batch_time_ms": 853.37,
+          "result": "passed",
+          "latency": "pass"
+        },
+        "public-2": {
+          "ttft_ms": 192.63,
+          "tpot_ms": 22.51,
+          "tps": 671.2,
+          "memory_gib": 11.44,
+          "batch_time_ms": 3051.41,
+          "result": "passed",
+          "latency": "pass"
+        }
+      },
+      "url": "https://htn.dryft.ai/bench/deployments/cc085c0f-7d0b-4e83-8b71-38fc2cd2c4f1",
+      "full_run_id": "4877cddd-414d-4fa1-9a27-8537ac0f12a1",
+      "commit": "5bd5a43",
+      "status": "succeeded"
+    },
+    {
+      "run_id": "69b39b11",
+      "label": "#11 static cache and decode graph",
+      "score": 288.5,
+      "rank": 42,
+      "source": "Run page verified through Chrome on 2026-09-20 UTC; rank is the historical snapshot supplied by the user.",
+      "workloads": {
+        "public-0": {
+          "ttft_ms": 22.52,
+          "tpot_ms": 9.62,
+          "tps": 99.7,
+          "memory_gib": 9.63,
+          "batch_time_ms": 320.89,
+          "result": "passed",
+          "latency": "pass"
+        },
+        "public-1": {
+          "ttft_ms": 203.42,
+          "tpot_ms": 17.7,
+          "tps": 170.1,
+          "memory_gib": 11.84,
+          "batch_time_ms": 752.58,
+          "result": "passed",
+          "latency": "pass"
+        },
+        "public-2": {
+          "ttft_ms": 193.03,
+          "tpot_ms": 19.17,
+          "tps": 779.5,
+          "memory_gib": 12.01,
+          "batch_time_ms": 2627.39,
+          "result": "passed",
+          "latency": "pass"
+        }
+      },
+      "url": "https://htn.dryft.ai/bench/deployments/0a7e67b1-e010-4bca-a35e-8239ac067814",
+      "full_run_id": "69b39b11-8c3d-47cc-abdf-8e748362244c",
+      "commit": "20e929b",
+      "status": "succeeded"
+    },
+    {
+      "run_id": "1bf05baa",
+      "label": "#18 hand-rolled lineage + native prefill graph",
+      "score": 670.7,
+      "rank": 38,
+      "source": "Run page verified through Chrome on 2026-09-20 UTC; rank is the historical snapshot supplied by the user.",
+      "note": "This official result is commit 012646d (Dryft submission #5, local freeze #25), after native prefill graph capture. The requested #18 label denotes the earlier hand-rolled decode stage; local log #18 itself failed h-c TTFT. Rank 38 is the user-supplied snapshot; the page showed team rank 42 when verified.",
+      "workloads": {
+        "public-0": {
+          "ttft_ms": 19.68,
+          "tpot_ms": 4.75,
+          "tps": 191.6,
+          "batch_time_ms": 167.03,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 10.2
+        },
+        "public-1": {
+          "ttft_ms": 201.59,
+          "tpot_ms": 6.06,
+          "tps": 328.6,
+          "batch_time_ms": 389.51,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 11.9
+        },
+        "public-2": {
+          "ttft_ms": 190.75,
+          "tpot_ms": 6.16,
+          "tps": 2104.4,
+          "batch_time_ms": 973.18,
+          "result": "passed",
+          "latency": "pass",
+          "memory_gib": 12.65
+        }
+      },
+      "url": "https://htn.dryft.ai/bench/deployments/98805282-8421-40de-a946-d490a7d9a1e7",
+      "full_run_id": "1bf05baa-3cb4-452c-ad56-4c30f43c82d9",
+      "commit": "012646d",
+      "status": "succeeded"
+    }
+  ]
+}

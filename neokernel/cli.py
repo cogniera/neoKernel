@@ -236,6 +236,7 @@ def race(remote, a, b, workload):
 def parser():
     root = argparse.ArgumentParser(description="neoKernel v1: local research harness, explicit remote commands")
     commands = root.add_subparsers(dest="command", required=True)
+    commands.add_parser("report", help="generate docs/RESULTS.md and docs/log.md from saved local evidence, offline")
     commands.add_parser("guard", help="lint only, offline")
     commands.add_parser("download-weights", help="explicit one-time Modal checkpoint download")
     for name in ["check", "bench", "freeze", "auto", "sweep"]:
@@ -277,6 +278,11 @@ def main(argv=None) -> int:
                 stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     args = parser().parse_args(argv)
     try:
+        if args.command == "report":
+            from .report import generate
+            for path in generate():
+                print(f"Generated {path}")
+            return 0
         if args.command == "log":
             records = [r for r in read_log() if not args.kept or r["kept"]]
             print(f"Log: {len(records)} matching experiments")

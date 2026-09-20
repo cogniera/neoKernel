@@ -1,14 +1,15 @@
 # Hand-rolled decode
 
-Status: implemented and measured, but **final freeze failed h-c TTFT**. After
-reviewing this result, the operator explicitly authorized committing and pushing
-the candidate. The local freeze remains failed; no accepted freeze directory
-was created. All
-correctness checks and the requested kernel-count/TPOT targets passed. Triton
-attention is selected. The unchanged five-sample h-c rerun passed, but that pass
-did not hold in the final all-workload freeze. The original failure, passing
-rerun, and failed freeze are all retained. Total estimated task spend: **$1.1663
-of $4.00**.
+Status: the original hand-rolled candidate failed its final h-c TTFT freeze
+(log #20). The later native-prefill graph candidate passed all six local
+workloads at five samples each (log #25), then scored 670.7 tok/s in official
+Dryft run `1bf05baa` on commit `012646d`. The earlier failures remain failures.
+Triton decode attention is selected. The chronology below separates those
+stages; the final subsection records the successful prefill follow-up.
+
+Sources: [log export](log.md),
+[`freeze_prefill_graph/FREEZE.json`](../neokernel/results/freeze_prefill_graph/FREEZE.json),
+and [official run records](../neokernel/results/dryft_runs.json).
 
 ## Implementation
 
@@ -32,7 +33,7 @@ and cache visibility, and emits exactly the requested number of steps.
 
 `engine/kernels/__init__.py` contains the five CONFIG switches and 14 scalar
 TUNABLES. `neokernel/program.md` describes their alternatives and constraints.
-Current values are candidate settings, not a frozen submission.
+The accepted snapshot is under `neokernel/results/freeze_prefill_graph/engine/`.
 
 ## Numerical evidence
 
@@ -101,6 +102,14 @@ the Triton/SDPA results; neither marks the engine frozen or kept.
 | public-1 | 318.76 | 6.243 | 1.02 | 0.90% | 405.54 |
 | public-2 | 2035.73 | 6.368 | 1.03 | 0.63% | 2490.19 |
 
+Direct comparison from [Triton](../neokernel/results/hand_rolled_triton.json) and [grouped SDPA](../neokernel/results/hand_rolled_sdpa_grouped.json):
+
+| Workload | Triton tok/s | Grouped SDPA tok/s | Triton TPOT ms | Grouped SDPA TPOT ms |
+| --- | ---: | ---: | ---: | ---: |
+| public-0 | 174.16 | 151.17 | 4.987 | 5.904 |
+| public-1 | 318.76 | 273.05 | 6.243 | 8.433 |
+| public-2 | 2035.73 | 2039.07 | 6.368 | 6.351 |
+
 Batch-1 TPOT is only 0.013 ms below the requested 5 ms target in this run; the
 full benchmark and freeze must establish whether it holds across samples.
 Dryft-equivalent values use the accepted host calibration and are estimates,
@@ -145,7 +154,8 @@ recorded; no gate was relaxed. Task spending after this rerun is $0.6947.
 
 ## Before/after H100 profiles
 
-The before snapshot is the kept engine from the start of this task. Each trace
+The before snapshot is the #11 graph baseline from the start of this task;
+the after snapshot is the #18 hand-rolled decode stage. Each trace
 captures a warmed decode step. Profiling overhead is included in wall time and
 gap, so these are not substitutes for streamed TPOT measurements.
 
@@ -155,6 +165,13 @@ gap, so these are not substitutes for streamed TPOT measurements.
 | public-0 | hand-rolled | 439 | 4.279 | 2.369 | 1 | 1 |
 | public-2 | before | 2400 | 17.457 | 6.004 | 1 | 1 |
 | public-2 | hand-rolled | 475 | 5.810 | 2.625 | 1 | 1 |
+
+Sources: [B1 before](../neokernel/results/hand_rolled_profile_before_public-0.json),
+[B1 after](../neokernel/results/hand_rolled_profile_after_public-0.json),
+[B16 before](../neokernel/results/hand_rolled_profile_before_public-2.json),
+[B16 after](../neokernel/results/hand_rolled_profile_after_public-2.json).
+These are separate captures from the earlier 8.684 ms #11 diagnostic in
+GRAPH_DIAGNOSIS.md; neither capture replaces the other.
 
 Both measured shapes are below the requested 600-kernel target. The single host
 synchronization is `cudaStreamSynchronize` from list conversion. Full traces are
@@ -219,3 +236,34 @@ the measurements or the historical log #20 above.
 Triton API references checked against the pinned release:
 [standard operations](https://github.com/triton-lang/triton/blob/v3.1.0/python/triton/language/standard.py),
 [JIT launch interface](https://github.com/triton-lang/triton/blob/v3.1.0/python/triton/runtime/jit.py).
+
+## Resolution of the h-c TTFT episode
+
+The sequence was failure at 1.051944x native (#18), an isolated five-sample
+pass at 1.046791x (#19), then another all-workload freeze failure at
+1.051394x (#20). Passing the isolated rerun did not establish repeatable
+headroom. These are local ratios; none should be substituted for a website
+native measurement. Source: [log.md](log.md) and the saved reports above.
+
+A later attempt to fuse prefill norms passed one check but failed a fresh L4
+public-2 replay at a 2.125 logit deficit (#23). It was removed. The retained
+change captures native prefill operations in a CUDA graph and preserves native
+normalization arithmetic. The full #25 freeze passed with h-c TTFT 188.015 ms,
+ratio 0.9878; all six TTFT ratios were at most 0.9906. B1 TTFT was 18.588 ms,
+ratio 0.8063. Source: [freeze record](../neokernel/results/freeze_prefill_graph/FREEZE.json)
+and [prefill follow-up](PREFILL_LATENCY_FIX.md).
+
+The original kernel and handoff unit reports describe the hand-rolled decode
+integration before this prefill change. They are not a claim that every GPU
+unit test was rerun after prefill capture; the final candidate's end-to-end
+correctness evidence is the L4 check and five-sample H100 freeze.
+Numerical source reports: [unit attempt 2](../neokernel/results/hand_rolled_unit_tests_attempt2.json)
+and [integrated handoff](../neokernel/results/hand_rolled_integration_tests.json).
+
+Official run `1bf05baa` subsequently passed with public TTFT 19.68 / 201.59 /
+190.75 ms, TPOT 4.75 / 6.06 / 6.16 ms and throughput 191.6 / 328.6 / 2104.4
+for B1 / B4 / B16. Its hidden-workload score was 670.7 tok/s. The run page
+identifies commit `012646d`, not the original failed #18 candidate. Source:
+[official record](../neokernel/results/dryft_runs.json). Cumulative spending
+by tier is generated in [RESULTS.md](RESULTS.md); the $1.1663 figure earlier
+in this document is the historical task subtotal at the failed freeze.

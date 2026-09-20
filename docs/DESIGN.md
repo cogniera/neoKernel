@@ -1,6 +1,6 @@
 # neoKernel v1 design
 
-neoKernel is a research harness for whole-generation optimization of the pinned Qwen3 4B model. The submission remains the source under engine/. The harness packages that source using agent/package.py and never ships its judge, guard, logs, credentials, or agent to Dryft. The initial starter is unchanged. A frozen copy in neokernel/native_engine.py supplies reference timings after candidate changes.
+neoKernel is a research harness for whole-generation optimization of the pinned Qwen3 4B model. The submission remains the source under engine/. The harness packages that source using agent/package.py and never ships its judge, guard, logs, credentials, or agent to Dryft. A preserved native starter in neokernel/native_engine.py supplies reference timings after candidate changes.
 
 ## Components and trust boundary
 
@@ -53,7 +53,7 @@ floor_tps = batch * N / (prefill_floor_s + decode_floor_s)
 measured_to_floor_ratio = measured_tps / floor_tps
 ```
 
-Actual weight_bytes is deliberately pending. The native loader prints and the run JSON stores the observed value; no model was downloaded or loaded during code-only implementation. Populate it and residual protocol differences in CALIBRATION.md after authorized evaluation. Do not present the planning estimate near 2.4 ms as a measurement.
+The recorded weight payload is 8,044,936,192 bytes, giving an estimated 2.401 ms weight-read floor under the bandwidth assumption above. This is an estimate, not measured kernel latency. See `neokernel/results/hand_rolled_profile_after_public-0.json` and the per-shape table in [RESULTS.md](RESULTS.md).
 
 A sample below the estimated decode floor, or TTFT below the prefill floor, is flagged physics_violation and cannot be kept. A literal module-level SPECULATIVE = True relaxes the decode bound to N*step_floor_s/8, visibly recorded in each result, while leaving prefill unchanged. These are heuristic plausibility limits. Exact speculation can legitimately cross a per-token weight bound, and other hardware effects can make a theoretical bound imperfect.
 
@@ -61,19 +61,33 @@ Profiling measures one decode step after complete warmup and fresh prefill. It r
 
 ## Search and persistence
 
+The optimization work is split into three tiers:
+
+| Tier | Responsibility | Evidence and interface |
+| --- | --- | --- |
+| Coding agent | Rewrite the execution path and create validated replacement kernels and switches. | Codex entries #10, #11 and #13 through #25 in [log.md](log.md). |
+| GLM structural loop | Propose bounded changes to the working implementation, including CONFIG fusion, attention and cache-layout choices. | `auto`, the default `zai-org/GLM-5.2` model, and the whole-file schema. Entries #5 and #7 through #9 show rejected structural attempts, not wins. |
+| Numeric sweep | Enumerate or sample TUNABLES such as block size, warp count and pipeline stages without an LLM. | `sweep` and `neokernel/sweep.py`; availability of this path is not evidence of a measured sweep win. |
+
+[InferenceBench](https://arxiv.org/abs/2607.20468) reports limited configuration exploration by agents and a simple hyperparameter search outperforming the evaluated agents under the same time budget. This motivates separating structural choices from numeric search. The three-tier split is a project design choice, not a finding that the paper evaluated this repository or this exact division of work. Local outcomes remain in `neokernel/results/log.jsonl`.
+
 Sweep enumerates or deterministically samples numeric choices from a literal TUNABLES dictionary without querying an LLM. Candidates are staged in a disposable tree; one judge_many invocation reuses the warm container and native model. Every candidate gets a one-workload correctness check followed by a two-sample benchmark. A passing improvement replaces the live tree only after search finishes and only if the operator has not changed that tree concurrently. The optional starter RMSNorm hook stages the guide's adapter; importing this package never wires it into the engine.
 
 The agent uses the Baseten OpenAI-compatible endpoint only on an explicit auto command. It validates the chosen model slug, requests structured JSON where supported, falls back only on explicit schema-support errors, and strictly parses fields with one repair attempt. Transient 429/5xx errors receive bounded exponential retries with jitter. The static operator program and schema lead the prompt unchanged; the current engine, profile, diff, last 15 log lines, and summarized older coverage follow.
 
 The loop measures the current baseline, validates whole-file replacement paths for engine.py and kernels/*.py, writes complete contents (empty strings delete only kernel files), runs guard, public correctness, and the selected three-sample benchmark. A keep requires every gate and greater than 1 percent geomean improvement. Five reverts at an item prohibit another attempt. Exact prompt-lookup speculation requires every earlier playbook item kept. A finally block restores rejected or interrupted experiments, and snapshots remain on disk for hard-crash recovery.
 
-The loop itself never commits, merges, or pushes. The operator authorized one harness commit on main followed by one experiment on a codex/ branch; candidate edits remain uncommitted and are kept or restored by the judge. Git generates the logged diff by comparing before/after snapshots with --no-index; the index is untouched. Full current content of every writable source file is included in agent context. Version records include the existing SHA and an archive digest because SHA alone does not identify uncommitted candidates. All run JSON, native records, profiles, snapshots, and append-only experiment logs live under ignored results/.
+Proposals contain exactly `item`, `hypothesis`, `expected_effect`, `files`, `risk` and `reasoning`. The `files` object maps allowed paths to complete replacement contents. For example, `files["engine/kernels/attention.py"]` must be the complete module, not a fragment or a diff. Omitted files stay unchanged; an empty string may delete a kernel file, but never the engine entry point. The full current files are supplied as context. `neokernel/schema.py` defines the schema and `neokernel/loop.py` applies it.
+
+This format replaced model-authored unified diffs after log #5 failed with `patch_failed: error: corrupt patch at line 29`. The model no longer writes hunk headers or line counts. Git generates the audit diff from the before/after snapshots after valid files have been applied. This addresses diff transport corruption; subsequent failures in #7 through #9 show that complete files still need syntax and correctness checks. Source: `neokernel/results/log.jsonl` and [log.md](log.md).
+
+The loop itself never commits, merges, or pushes. Candidate edits remain uncommitted and are kept or restored by the judge; attended Git actions are separate. Git generates the logged diff by comparing before/after snapshots with --no-index; the index is untouched. Full current content of every writable source file is included in agent context. Version records include the existing SHA and an archive digest because SHA alone does not identify uncommitted candidates. Run JSON, native records, profiles, snapshots, and append-only experiment logs live under `neokernel/results/`, which is normally ignored. The hand-kept `dryft_runs.json` is explicitly versioned for documentation.
 
 Freeze evaluates the current archive, requires public correctness and five-sample benchmark success, checks that source stayed unchanged, and copies it into a new output directory with FREEZE.json. It never publishes or submits the artifact.
 
 ## Design decisions and their sources
 
-The following sources and research claims were specified in the supplied build brief. Links were not fetched or independently verified because the user requested code only and no API calls. The implementation uses the stated ideas; it does not claim reproduction of those papers' results.
+The following sources were specified in the supplied build brief. The InferenceBench abstract was checked during this documentation pass; the other source descriptions below record design motivation from the brief rather than independently reproduced findings.
 
 [Dryft contract](../QWEN_ENGINE_CONTRACT.md), [optimization guide](../OPTIMIZATION_GUIDE.md), and [challenge docs](https://htn.dryft.ai/docs) supply generation shape, local checkpoint loading, fresh workload processes, warmup, latency and memory gates, median scoring, and replay on the emitted prefix. The guide and starter RMSNorm supply the BF16 cast-placement rule. The private corpus prompt derivation and full OS sandbox cannot be replicated from the public contract alone.
 
@@ -81,7 +95,7 @@ The following sources and research claims were specified in the supplied build b
 
 [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) motivates a small editable scope, frozen evaluation, and program.md as the operator's policy lever. The brief identifies its train.py versus prepare.py separation; neoKernel uses engine.py and kernels/ versus the harness.
 
-[InferenceBench, arXiv 2607.20468](https://arxiv.org/abs/2607.20468) is cited by the brief for premature convergence, median exploration of one configuration, a numeric search outperforming agents, and evaluator integrity violations under optimization pressure. The corresponding design choices are LLM-free numeric sweep, explicit playbook coverage, and independent integrity checks. Those comparative claims remain unverified here.
+[InferenceBench, arXiv 2607.20468](https://arxiv.org/abs/2607.20468) motivates explicit configuration exploration and LLM-free numeric search, as discussed above. This repository does not claim to reproduce its comparative results.
 
 [KernelGuard, Lacuna / Tiptree Systems](https://lacuna.tiptreesystems.com/work/we-let-agents-compete-and-they-tried-to-cheat-kernelguard-defending-gpu/wrk_8addb4ee547c113ab8c7edb2c64b9408) motivates defenses against cached output replay, timer monkeypatching, and evaluator mutation. neoKernel takes conservative source lint, parent-owned timing and replay, process separation, and physics plausibility bounds. These do not amount to a security proof.
 
@@ -95,4 +109,6 @@ The following sources and research claims were specified in the supplied build b
 
 ## Acceptance status
 
-Local tests cover guard rules, archive attacks, gate and floor arithmetic, output validation, patch boundaries, snapshot restoration, tunable staging, logs, budgets, profile aggregation, paired native caching, and pipe frames. CPU tensor tests use a tiny two-layer Qwen3 with hidden width 64. All 49 tests pass on Python 3.11 with CPU torch 2.5.1 and transformers 4.51.3, without skips. Modal version verification and L4 public correctness have passed. CALIBRATION.md records the latest H100 results; later profile and agent validation remain pending until calibration passes.
+Local tests cover guard rules, archive attacks, gate and floor arithmetic, output validation, proposal boundaries, snapshot restoration, tunable staging, logs, budgets, profile aggregation, paired native caching, and pipe frames. CPU tensor tests use a tiny two-layer Qwen3 with hidden width 64. The accepted native-prefill graph passed public L4 correctness and the five-sample six-workload H100 freeze in `neokernel/results/freeze_prefill_graph/FREEZE.json`, recorded as experiment #25. Historical failures remain in the log. See [RESULTS.md](RESULTS.md) for local and official evidence and [CALIBRATION.md](CALIBRATION.md) for host differences.
+
+`py -3.11 -m neokernel report` generates RESULTS.md and log.md from saved files without invoking the guard, Modal or a model API. It reads the experiment log, timestamped runs, profile aggregates, the spend ledger and hand-kept official records. Missing measurements remain missing; failed runs do not acquire an aggregate score.
