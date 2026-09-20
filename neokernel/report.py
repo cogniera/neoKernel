@@ -41,10 +41,14 @@ def outcome(row):
     failures = sorted({w.get("failure_code") for w in row.get("workloads", []) if w.get("failure_code")})
     if failures:
         return "failed: " + ", ".join(failures)
+    if "interrupted" in note and row.get("guard") == "not_run":
+        return "interrupted / recovered"
     if row.get("guard") != "pass":
         return "guard rejected"
     if row.get("kept"):
         return "kept"
+    if note.startswith("failed after") and "repair" in note:
+        return f"failed: unit tests after {row.get('repairs', 0)} repairs"
     if any(term in note for term in ("patch_failed", "failed", "rejected", "stopped", "does not match")):
         return "rejected / incomplete"
     return "measured, not kept" if row.get("geomean_tps") is not None else "validation / not kept"

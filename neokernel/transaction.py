@@ -193,7 +193,8 @@ class Transaction:
                     workloads=[{k: v for k, v in w.items() if k != 'samples'} for w in result.get('workloads', [])],
                     geomean_tps=result.get('geomean_tps'), delta_pct=delta, kept=kept,
                     gpu_seconds=result.get('gpu_seconds', 0), note=note, diff=diff,
-                    engine_sha256=result.get('engine_sha256'), implemented_items=[])
+                    engine_sha256=result.get('engine_sha256'), implemented_items=[],
+                    repairs=self.state.get('repairs', 0), first_error=self.state.get('first_error'))
 
     def clear(self):
         self.path.unlink(missing_ok=True)

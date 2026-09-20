@@ -56,6 +56,10 @@ class ReportTests(unittest.TestCase):
     def test_not_kept_is_not_automatically_failure(self):
         self.assertEqual(outcome({'guard': 'pass', 'kept': False, 'geomean_tps': 5}), 'measured, not kept')
         self.assertEqual(outcome({'guard': 'patch_failed', 'kept': False, 'note': 'patch_failed: corrupt patch'}), 'patch rejected')
+        self.assertEqual(outcome({'guard': 'pass', 'kept': False, 'note': 'failed after 2 repairs', 'repairs': 2}),
+                         'failed: unit tests after 2 repairs')
+        self.assertEqual(outcome({'guard': 'not_run', 'kept': False, 'note': 'interrupted; recovered without merge'}),
+                         'interrupted / recovered')
 
 
 if __name__ == '__main__':

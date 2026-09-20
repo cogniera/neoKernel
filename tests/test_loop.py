@@ -40,9 +40,39 @@ def result(score=100, passed=True):
                                 failure_code=None if passed else 'incorrect_output')])
 
 
+UNIT_FAILURE = '''test_attention (test_hand_rolled_kernels.HandRolledKernelTests.test_attention) ... ERROR
+test_norm_and_residual (test_hand_rolled_kernels.HandRolledKernelTests.test_norm_and_residual) ... {"test": "norm/1/False", "max_abs_diff": 0.0}
+ok
+
+======================================================================
+ERROR: test_attention (test_hand_rolled_kernels.HandRolledKernelTests.test_attention)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/x/tests/test_hand_rolled_kernels.py", line 137, in test_attention
+    attention_out(q, k, v, position, buf.attn, buf.partial, buf.lse)
+triton.compiler.errors.CompilationError: at 12:8: d = tl.arange(0, D)
+
+----------------------------------------------------------------------
+Ran 2 tests in 1.000s
+
+FAILED (errors=1)
+'''
+
+
 class FakeRemote:
     def __init__(self, score=102, fail=False, crash=False):
         self.calls, self.score, self.fail, self.crash = 0, score, fail, crash
+        self.unit_calls, self.unit_sources = 0, []
+
+    def unit_tests(self, sources):
+        # Stubbed L4 suite: a candidate passes once its engine yields [3].
+        self.unit_calls += 1
+        self.unit_sources.append(sources)
+        if self.unit_calls == getattr(self, 'unit_crash_on', None):
+            raise RuntimeError('unit test harness crash')
+        passed = not getattr(self, 'unit_fail', False) or 'yield [3]' in sources['engine/engine.py']
+        return dict(passed=passed, tests=2, skipped=0, returncode=0 if passed else 1, timed_out=False,
+                    output='Ran 2 tests in 1.000s\n\nOK\n' if passed else UNIT_FAILURE, gpu_seconds=7, gpu_tier='L4')
 
     def bench(self, *a, **kw):
         self.calls += 1
@@ -52,10 +82,17 @@ class FakeRemote:
 
 
 class FakeProposer:
-    def __init__(self, files=None):
+    def __init__(self, files=None, repairs=()):
         self.files = files or FILES
+        self.repairs, self.conversations = list(repairs), []
     def propose(self, messages):
         return Proposal('lm_head_argmax', 'test hypothesis', '2 percent', self.files, 'latency', 'test reasoning')
+    def repair(self, conversation):
+        self.conversations.append(list(conversation))
+        files = self.repairs.pop(0)
+        if files is None:
+            raise ValueError('invalid proposal after one retry: not json')
+        return Proposal('lm_head_argmax', 'test hypothesis', '2 percent', files, 'latency', 'repaired')
 
 
 class LoopTests(unittest.TestCase):
@@ -83,6 +120,7 @@ class LoopTests(unittest.TestCase):
             self.assertFalse(git(root, 'branch', '--list', 'exp/*'))
             self.assertTrue((root/'results/snapshots/1/engine/engine.py').exists())
             self.assertTrue(row['diff'])
+            self.assertEqual((row['repairs'], row['first_error']), (0, None))
             if kept:
                 self.assertEqual(git(root, 'rev-parse', 'kept-1'), git(root, 'rev-parse', 'main'))
                 best = json.loads((root/'results/best.json').read_text())
@@ -115,6 +153,114 @@ class LoopTests(unittest.TestCase):
                 self.assertEqual(git(root, 'branch', '--show-current'), 'main')
                 self.assertFalse((root/'results/CRASH.txt').exists())
                 self.assertEqual((root/'results/STOP.json').exists(), ceiling)
+
+
+    def repair_case(self, repairs, score=102, unit_crash_on=None):
+        """One agent step whose proposal fails the stubbed L4 suite until an engine yields [3]."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); repo(root)
+            args = argparse.Namespace(items=None, workloads='public-0', model='fake', steps=1, resume=False)
+            remote = FakeRemote(score); remote.unit_fail = True; remote.unit_crash_on = unit_crash_on
+            proposer = FakeProposer(repairs=repairs)
+            with patch.object(loop, 'ROOT', root), patch.object(loop, 'RESULTS', root/'results'):
+                if unit_crash_on:
+                    with self.assertRaises(RuntimeError):
+                        loop.run_loop(args, remote, proposer)
+                    self.assertEqual(git(root, 'branch', '--show-current'), 'exp/1')
+                    state = json.loads((root/'results/transaction.json').read_text())
+                    self.assertEqual(state['repairs'], 1)
+                    self.assertIn('CompilationError', state['first_error'])
+                    Transaction(root, root/'results').startup(resume=True)
+                    self.assertEqual(git(root, 'branch', '--show-current'), 'main')
+                    self.assertFalse(git(root, 'status', '--porcelain'))
+                else:
+                    self.assertEqual(loop.run_loop(args, remote, proposer), 0)
+            rows = read_log(root/'results')
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(git(root, 'branch', '--show-current'), 'main')
+            self.assertFalse(git(root, 'branch', '--list', 'exp/*'))
+            return rows[0], remote, proposer, sorted(p.name for p in (root/'results/unit_tests').glob('*.json')), \
+                sorted(p.name for p in (root/'results/proposals').glob('*.json'))
+
+    def test_repair_fixes_then_judges_and_keeps(self):
+        fixed = {'engine/engine.py': ENGINE.decode().replace('yield [1]', 'yield [3]')}
+        row, remote, proposer, units, proposals = self.repair_case([fixed])
+        self.assertTrue(row['kept'])
+        self.assertEqual((row['repairs'], remote.unit_calls, remote.calls), (1, 2, 3))
+        self.assertIn('CompilationError', row['first_error'])
+        self.assertEqual(units, ['1-0.json', '1-1.json'])
+        self.assertEqual(proposals, ['1-repair1.json', '1.json'])
+        self.assertEqual(row['gpu_seconds'], 1 + 1 + 7 + 7)
+        self.assertIn('yield [3]', row['diff'])
+        conversation = proposer.conversations[0]
+        self.assertEqual([m['role'] for m in conversation[-2:]], ['assistant', 'user'])
+        self.assertIn('yield [2]', conversation[-2]['content'])
+        self.assertIn('Repair turn 1 of 2', conversation[-1]['content'])
+        self.assertIn('CompilationError', conversation[-1]['content'])
+        self.assertNotIn('max_abs_diff', conversation[-1]['content'])
+        self.assertIn('tests/test_hand_rolled_kernels.py', remote.unit_sources[0])
+        self.assertIn('tests/test_hand_rolled_handoff.py', remote.unit_sources[0])
+        self.assertNotIn('Remote', remote.unit_sources[0]['tests/test_hand_rolled_handoff.py'])
+
+    def test_reverts_after_two_failed_repairs(self):
+        still = [{'engine/engine.py': ENGINE.decode().replace('yield [1]', f'yield [{n}]')} for n in (4, 5)]
+        row, remote, proposer, units, proposals = self.repair_case(still)
+        self.assertFalse(row['kept'])
+        self.assertEqual(row['note'], 'failed after 2 repairs')
+        self.assertEqual((row['repairs'], remote.unit_calls, remote.calls), (2, 3, 1))
+        self.assertEqual(row['geomean_tps'], None)
+        self.assertEqual(row['gpu_seconds'], 21)
+        self.assertIn('yield [5]', row['diff'])
+        self.assertEqual(units, ['1-0.json', '1-1.json', '1-2.json'])
+        self.assertIn('Repair turn 2 of 2', proposer.conversations[1][-1]['content'])
+
+    def test_guard_rejected_and_invalid_repairs_consume_turns(self):
+        bad = {'engine/engine.py': ENGINE.decode().replace('yield [1]', "eval('3')")}
+        fixed = {'engine/engine.py': ENGINE.decode().replace('yield [1]', 'yield [3]')}
+        row, remote, proposer, units, _ = self.repair_case([bad, fixed])
+        self.assertTrue(row['kept'])
+        self.assertEqual((row['repairs'], remote.unit_calls), (2, 2))
+        self.assertIn('Guard rejected the repaired files', proposer.conversations[1][-1]['content'])
+        self.assertIn('eval is forbidden', proposer.conversations[1][-1]['content'])
+        self.assertNotIn('eval', remote.unit_sources[1]['engine/engine.py'])
+        row, remote, proposer, units, _ = self.repair_case([None, fixed])
+        self.assertTrue(row['kept'])
+        self.assertEqual((row['repairs'], remote.unit_calls), (2, 2))
+        self.assertIn('not valid proposal JSON', proposer.conversations[1][-1]['content'])
+
+    def test_crash_during_retest_is_journaled_and_recoverable(self):
+        fixed = {'engine/engine.py': ENGINE.decode().replace('yield [1]', 'yield [3]')}
+        row, remote, proposer, units, _ = self.repair_case([fixed], unit_crash_on=2)
+        self.assertFalse(row['kept'])
+        self.assertEqual(row['note'], 'interrupted; recovered without merge')
+        self.assertEqual(row['repairs'], 1)
+        self.assertIn('CompilationError', row['first_error'])
+        self.assertIn('yield [3]', row['diff'])
+
+    def test_unit_output_summary_and_local_suite_runner(self):
+        first, excerpt = loop.summarize_unit_output(UNIT_FAILURE)
+        self.assertTrue(first.startswith('ERROR: test_attention'))
+        self.assertIn('CompilationError', first)
+        self.assertIn('FAILED (errors=1)', excerpt)
+        self.assertNotIn('max_abs_diff', excerpt)
+        self.assertEqual(loop.summarize_unit_output('Segmentation fault\n'), ('Segmentation fault\n', 'Segmentation fault\n'))
+        from neokernel import modal_app
+        for name, ok in [('engine/engine.py', True), ('engine/kernels/lm_head_argmax.py', True), ('tests/test_hand_rolled_x.py', True),
+                         ('tests/test_loop.py', False), ('engine/kernels/../engine.py', False), ('neokernel/judge.py', False),
+                         ('engine/kernels/x.txt', False), ('/engine/engine.py', False)]:
+            self.assertEqual(modal_app.unit_source_ok(name), ok, name)
+        stub = ('import sys, unittest\nfrom pathlib import Path\nclass T(unittest.TestCase):\n    def test_engine(self):\n'
+                '        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))\n        import engine\n'
+                '        self.assertEqual(list(engine.Engine("").generate([[1]], 1)), [[%s]])\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            sources = {'engine/engine.py': ENGINE.decode(), 'tests/test_hand_rolled_stub.py': stub % 1}
+            passing = modal_app.run_unit_suite(sources, Path(tmp) / 'a')
+            self.assertEqual((passing['passed'], passing['tests'], passing['skipped']), (True, 1, 0))
+            failing = modal_app.run_unit_suite({**sources, 'tests/test_hand_rolled_stub.py': stub % 2}, Path(tmp) / 'b')
+            self.assertEqual((failing['passed'], failing['returncode']), (False, 1))
+            self.assertIn('FAIL: test_engine', failing['output'])
+            with self.assertRaises(ValueError):
+                modal_app.run_unit_suite({**sources, 'tests/test_loop.py': ''}, Path(tmp) / 'c')
 
     def test_sweep_threshold_and_numeric_coordinates(self):
         from neokernel import sweep, storage

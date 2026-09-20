@@ -167,6 +167,24 @@ class Remote:
             refresh_host_factors(result)
         return result
 
+    def unit_tests(self, sources):
+        """Repair-stage kernel and handoff tests on L4; the result is diagnostic, never a keep input."""
+        self.reserve(GPU_TIMEOUT_S)
+        self.spend.reserve("L4")
+        started = time.perf_counter()
+        try:
+            result = self.api.unit_test_remote.remote(sources)
+        except BaseException:
+            self.charge(GPU_TIMEOUT_S)
+            try:
+                self.spend.record("L4", started, None, "unit_tests", False)
+            except SpendLimit:
+                pass
+            raise
+        self.charge(result.get("gpu_seconds", 0))
+        self.spend.record("L4", started, result.get("gpu_seconds", 0), "unit_tests", result["passed"])
+        return result
+
     def many(self, payloads, workloads, samples=2, validate_rmsnorm=False):
         if validate_rmsnorm:
             raise ValueError('Use the tested staged sweep for RMSNorm integration')

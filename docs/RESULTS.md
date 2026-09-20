@@ -52,16 +52,16 @@ One warm decode step. Kernel time and gap include profiler overhead and are not 
 
 Bandwidth assumes 3.35 TB/s; prefill assumes 600 TFLOP/s. Measured/floor is measured throughput divided by estimated floor throughput, not a hardware utilization measurement. Local h-a/h-b/h-c are proxy shapes, not disclosed Dryft hidden shapes.
 
-Latest eligible full H100 run when available: [20260919T225829_143807_31857c8e14f7.json](../neokernel/results/runs/20260919T225829_143807_31857c8e14f7.json).
+Latest eligible full H100 run when available: [20260920T044555_947330_cd30f0c9bea2.json](../neokernel/results/runs/20260920T044555_947330_cd30f0c9bea2.json).
 
 | Shape B/S/N | Workload | Step floor ms | Prefill floor ms | Decode floor ms | Floor tok/s | Measured tok/s | Measured/floor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1/512/32 | public-0 | 2.401 | 6.865 | 74.446 | 393.552 | 194.673 | 0.4947 |
-| 4/2048/32 | public-1 | 2.401 | 109.840 | 74.446 | 694.573 | 330.542 | 0.4759 |
-| 16/512/128 | public-2 | 2.401 | 109.840 | 304.987 | 4936.994 | 2093.999 | 0.4241 |
-| 2/1024/64 | h-a | 2.401 | 27.460 | 151.293 | 716.072 | 340.336 | 0.4753 |
-| 8/1024/64 | h-b | 2.401 | 109.840 | 151.293 | 1960.687 | 890.848 | 0.4544 |
-| 32/256/64 | h-c | 2.401 | 109.840 | 151.293 | 7842.746 | 3484.073 | 0.4442 |
+| 1/512/32 | public-0 | 2.401 | 6.865 | 74.446 | 393.552 | 196.889 | 0.5003 |
+| 4/2048/32 | public-1 | 2.401 | 109.840 | 74.446 | 694.573 | 332.158 | 0.4782 |
+| 16/512/128 | public-2 | 2.401 | 109.840 | 304.987 | 4936.994 | 2120.874 | 0.4296 |
+| 2/1024/64 | h-a | 2.401 | 27.460 | 151.293 | 716.072 | 358.371 | 0.5005 |
+| 8/1024/64 | h-b | 2.401 | 109.840 | 151.293 | 1960.687 | 894.867 | 0.4564 |
+| 32/256/64 | h-c | 2.401 | 109.840 | 151.293 | 7842.746 | 3499.467 | 0.4462 |
 
 ## Experiment log
 
@@ -94,6 +94,17 @@ Source: [log.jsonl](../neokernel/results/log.jsonl). Local geomeans use each row
 | 23 | codex | hand_rolled_decode | failed: incorrect_output | not recorded | 81.996 |
 | 24 | codex | hand_rolled_decode | measured, not kept | 190.579 | 28.499 |
 | 25 | codex | hand_rolled_decode | kept | 722.578 | 180.448 |
+| 26 | agent | lm_head_argmax | failed: candidate_error | not recorded | 56.824 |
+| 27 | agent | attention_impl_kv_layout | interrupted / recovered | not recorded | 0.000 |
+| 28 | agent | lm_head_argmax | failed: candidate_error | not recorded | 62.369 |
+| 29 | agent | attention_impl_kv_layout | rejected / incomplete | 693.083 | 278.588 |
+| 30 | agent | lm_head_argmax | failed: candidate_error | not recorded | 61.588 |
+| 31 | agent | lm_head_argmax | failed: candidate_error | not recorded | 44.970 |
+| 32 | agent | lm_head_argmax | failed: candidate_error | not recorded | 44.792 |
+| 33 | agent | prefill_packed_weights | failed: candidate_error | not recorded | 31.017 |
+| 34 | agent | prefill_packed_weights | failed: candidate_error | not recorded | 31.942 |
+| 35 | agent | prefill_cuda_graph | rejected / incomplete | 733.436 | 238.678 |
+| 36 | agent | attention_impl_kv_layout | interrupted / recovered | not recorded | 0.000 |
 
 ## Estimated spend
 
@@ -101,7 +112,8 @@ Sources: [spend.json](../neokernel/results/spend.json) and [setup.json](../neoke
 
 | Tier | Calls | Estimated allocation seconds | Estimated USD |
 | --- | --- | --- | --- |
-| H100 | 26 | 3046.291 | 3.871757 |
-| L4 | 24 | 3929.241 | 1.554498 |
+| Baseten | 12 | 0.000 | 1.243983 |
+| H100 | 33 | 7083.002 | 9.009844 |
+| L4 | 37 | 5580.807 | 2.211557 |
 | CPU setup | 2 | not GPU allocation | 0.008339 |
-| Total |  |  | 5.434594 |
+| Total |  |  | 12.473723 |

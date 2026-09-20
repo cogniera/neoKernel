@@ -152,6 +152,8 @@ class LogLine:
     proposal_sha256: str | None = None
     diff: str = ''
     implemented_items: list[str] = field(default_factory=list)
+    repairs: int = 0
+    first_error: str | None = None
 
 
 def json_schema(annotation) -> dict:

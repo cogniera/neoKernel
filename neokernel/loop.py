@@ -22,6 +22,9 @@ from .judge import keep_decision
 KEPT_ITEMS = {'static_kv_cache', 'bypass_wrapper', 'cuda_graph_decode', 'concat_qkv', 'concat_gate_up',
               'fused_rmsnorm', 'fused_qk_norm_rope_kv_write', 'fused_silu_mul', 'decode_attention_kernel'}
 PLAYBOOK = ['attention_impl_kv_layout', 'lm_head_argmax', 'prefill_packed_weights', 'prefill_cuda_graph']
+REPAIR_TURNS = 2
+UNIT_TEST_FILES = ('tests/test_hand_rolled_kernels.py', 'tests/test_hand_rolled_handoff.py')
+FIRST_ERROR_CHARS = 4000
 
 
 def allowed_path(name: str) -> bool:
@@ -169,6 +172,10 @@ class Proposer:
         self.spend.settle(amount, operation='GLM-5.2 proposal')
         return result
 
+    def repair(self, conversation: list[dict]) -> Proposal:
+        """Same schema and model; the conversation carries the model's own files and the test output."""
+        return self.propose(conversation)
+
     def propose(self, messages: list[dict]) -> Proposal:
         last_error = None
         for attempt in range(2):
@@ -218,17 +225,114 @@ def validate_proposal(proposal: Proposal, items: list[str], records: list[dict])
         raise ValueError("reasoning exceeds three sentences")
 
 
-def run_experiment(transaction, remote, baseline, workloads, files, hypothesis='', proposal=None):
+def unit_sources(engine_dir: Path) -> dict[str, str]:
+    """Candidate engine plus the harness's own test files; a proposal never supplies tests."""
+    sources = {'engine/' + name: data.decode('utf-8') for name, data in snapshot(engine_dir).items()
+               if allowed_path('engine/' + name)}
+    harness = Path(__file__).resolve().parents[1]
+    for name in UNIT_TEST_FILES:
+        sources[name] = (harness / name).read_text(encoding='utf-8')
+    return sources
+
+
+def summarize_unit_output(output: str, limit: int = 12000) -> tuple[str, str]:
+    """First failure block, and a bounded excerpt of test headers, failure blocks and the final summary."""
+    blocks = [b.strip('\n') for b in output.split('=' * 70)]
+    failures = [b for b in blocks if b.startswith(('ERROR:', 'FAIL:'))]
+    headers = []
+    for line in output.splitlines():
+        if re.match(r'^test_\w+ \(', line):
+            head, _, status = line.partition(' ... ')
+            headers.append(head[:160] + ' ... ' + (status if re.match(r'^(ok|ERROR|FAIL|skipped)\b', status) else ''))
+        elif re.match(r'^(Ran \d|OK\b|FAILED|TIMEOUT)', line):
+            headers.append(line[:200])
+    first = failures[0] if failures else output[-FIRST_ERROR_CHARS:]
+    excerpt = '\n'.join(headers) + '\n\n' + '\n\n'.join(failures) if failures else output[-limit:]
+    if len(excerpt) > limit:
+        excerpt = excerpt[:limit] + '\n[truncated]'
+    return first[:FIRST_ERROR_CHARS], excerpt
+
+
+def repair_request(turn: int, failure: str) -> str:
+    return (f"Repair turn {turn} of {REPAIR_TURNS}. Your proposal passed the guard but failed the harness's fixed unit tests "
+            f"on L4 ({', '.join(UNIT_TEST_FILES)}). They compare every kernel with the Transformers 4.51.3 module it "
+            "replaces on random inputs and check the engine for prefill handoff, graph and buffer reuse, exact output "
+            "counts and fresh-prompt reset on the pinned checkpoint; the interfaces they import must stay available.\n"
+            f"Test output:\n{failure}\n"
+            "Return corrected complete files in the same proposal schema with the same item and hypothesis. Include the "
+            "full content of every file you change; omitted files stay as last applied. Fix the cause of the failure "
+            "rather than removing what the tests exercise.")
+
+
+def repair_stage(transaction, remote, engine_dir, proposal, proposer, messages):
+    """L4 unit tests between guard and check, with up to REPAIR_TURNS corrected-file turns from the same model."""
+    ident = transaction.state['id']
+    conversation = [*messages, {'role': 'assistant', 'content': json.dumps(vars(proposal))}]
+    summary = dict(passed=False, repairs=0, first_error=None, gpu_seconds=0.0)
+
+    def test(turn):
+        result = remote.unit_tests(unit_sources(engine_dir))
+        write_json(RESULTS / 'unit_tests' / f'{ident}-{turn}.json', result)
+        summary['gpu_seconds'] += result.get('gpu_seconds', 0)
+        if result.get('skipped'):
+            raise RuntimeError(f"unit tests skipped on L4; environment problem, not a candidate failure: {result['output'][-2000:]}")
+        first, excerpt = summarize_unit_output(result['output'])
+        print(f"Unit tests {ident} turn {turn}: {'passed' if result['passed'] else 'FAILED'}; "
+              f"tests={result.get('tests')}; GPU seconds={result.get('gpu_seconds', 0):.2f}", flush=True)
+        return result['passed'], first, excerpt
+
+    passed, first, failure = test(0)
+    if not passed:
+        summary['first_error'] = first
+        transaction.state.update(stage='unit_tests', first_error=first)
+        transaction.save()
+    while not passed and summary['repairs'] < REPAIR_TURNS and proposer is not None:
+        turn = summary['repairs'] + 1
+        summary['repairs'] = turn
+        transaction.state.update(repairs=turn)
+        transaction.save()
+        conversation.append({'role': 'user', 'content': repair_request(turn, failure)})
+        try:
+            repaired = proposer.repair(conversation)
+        except SpendLimit:
+            raise
+        except ValueError as exc:
+            failure = f'Your repair was not valid proposal JSON: {exc}'
+            print(f'Repair {ident}-{turn}: invalid proposal JSON', flush=True)
+            continue
+        write_json(RESULTS / 'proposals' / f'{ident}-repair{turn}.json', vars(repaired))
+        conversation.append({'role': 'assistant', 'content': json.dumps(vars(repaired))})
+        tested = snapshot(engine_dir)
+        try:
+            apply_proposal(engine_dir, repaired.files)
+            check(engine_dir)
+        except (GuardError, ValueError) as exc:
+            restore(engine_dir, tested)
+            failure = f'Guard rejected the repaired files, so they were not applied or tested: {exc}'
+            print(f'Repair {ident}-{turn}: guard rejected; {exc}', flush=True)
+            continue
+        passed, _, failure = test(turn)
+    summary['passed'] = passed
+    return summary
+
+
+def run_experiment(transaction, remote, baseline, workloads, files, hypothesis='', proposal=None,
+                   proposer=None, messages=None):
     engine_dir = transaction.root / 'engine'
     before = snapshot(engine_dir)
-    changed, result, guard_status, note = [], None, 'not_run', ''
+    changed, result, guard_status, note, unit = [], None, 'not_run', '', None
     try:
         changed = apply_proposal(engine_dir, files)
         check(engine_dir)
         guard_status = 'pass'
     except (GuardError, ValueError) as exc:
         guard_status, note = 'fail', str(exc)
-    if guard_status == 'pass':
+    if guard_status == 'pass' and proposal is not None:
+        # Only a candidate that passes the unit tests reaches check and the judge.
+        unit = repair_stage(transaction, remote, engine_dir, proposal, proposer, messages or [])
+        if not unit['passed']:
+            note = f"failed after {unit['repairs']} repairs" if unit['repairs'] else 'unit tests failed; no repair proposer'
+    if guard_status == 'pass' and (unit is None or unit['passed']):
         checked = remote.bench(package(engine_dir), PUBLIC, 1, correctness_only=True)
         keep_decision(checked, baseline)  # Surface infrastructure failure codes even on L4.
         if not checked['eligible']:
@@ -238,7 +342,12 @@ def run_experiment(transaction, remote, baseline, workloads, files, hypothesis='
             result['gpu_seconds'] += checked.get('gpu_seconds', 0)
     kept, delta = keep_decision(result, baseline) if result else (False, None)
     note = note or ('judge kept improvement above 1 percent' if kept else 'gates failed or improvement did not exceed 1 percent')
-    diff = generated_diff(before, snapshot(engine_dir))
+    after = snapshot(engine_dir)
+    changed = sorted('engine/' + name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+    diff = generated_diff(before, after)
+    if unit:
+        result = result or {}
+        result['gpu_seconds'] = result.get('gpu_seconds', 0) + unit['gpu_seconds']
     row = transaction.row(result, kept, delta, guard_status, note, diff, changed)
     if proposal:
         row['proposal_sha256'] = proposal_digest(proposal.files)
@@ -296,7 +405,8 @@ def run_loop(args, remote, proposer=None) -> int:
             transaction.state.update(item=proposal.item, hypothesis=proposal.hypothesis)
             transaction.save()
             write_json(RESULTS / 'proposals' / f"{transaction.state['id']}.json", vars(proposal))
-            baseline = run_experiment(transaction, remote, baseline, workloads, proposal.files, proposal=proposal)
+            baseline = run_experiment(transaction, remote, baseline, workloads, proposal.files, proposal=proposal,
+                                      proposer=proposer, messages=messages)
         return 0
     except SpendLimit as exc:
         record_stop(exc, RESULTS)

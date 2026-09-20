@@ -154,6 +154,66 @@ def check_remote(engine_tar: bytes, workloads: list, native: dict | None = None)
     return result
 
 
+UNIT_TEST_TIMEOUT_S = GPU_TIMEOUT_S - 120
+
+
+def unit_source_ok(name: str) -> bool:
+    """Engine source in the proposal write scope, or the harness's own test files."""
+    from pathlib import PurePosixPath
+    parts = PurePosixPath(name).parts
+    if name != PurePosixPath(*parts).as_posix() or any(p in {'', '.', '..'} for p in parts) or not name.endswith('.py'):
+        return False
+    if name == 'engine/engine.py' or (parts[0] == 'engine' and parts[1:2] == ('kernels',) and len(parts) >= 3):
+        return True
+    return parts[0] == 'tests' and len(parts) == 2 and parts[1].startswith('test_hand_rolled')
+
+
+def run_unit_suite(sources: dict[str, str], root: Path) -> dict:
+    """Kernel and handoff tests in a fresh interpreter; a warm container never reuses cached modules."""
+    import re
+    import subprocess
+    import sys
+    from .guard import check
+    for name, source in sources.items():
+        if not unit_source_ok(name):
+            raise ValueError(f'unexpected unit test source: {name}')
+        dest = root / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(source, encoding='utf-8', newline='\n')
+    check(root / 'engine')
+    env = dict(os.environ, QWEN_MODEL_PATH=MODEL_PATH, PYTHONUNBUFFERED='1', PYTHONDONTWRITEBYTECODE='1')
+    command = [sys.executable, '-m', 'unittest', 'discover', '-s', str(root / 'tests'), '-p', 'test_hand_rolled*.py', '-v']
+    try:
+        completed = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8',
+                                   errors='replace', timeout=UNIT_TEST_TIMEOUT_S)
+        output, returncode, timed_out = completed.stdout + completed.stderr, completed.returncode, False
+    except subprocess.TimeoutExpired as exc:
+        output = ''.join(part.decode('utf-8', 'replace') if isinstance(part, bytes) else part or ''
+                         for part in (exc.stdout, exc.stderr))
+        output += f'\nTIMEOUT: unit tests exceeded {UNIT_TEST_TIMEOUT_S} seconds and were killed\n'
+        returncode, timed_out = None, True
+    ran = re.search(r'^Ran (\d+) tests? in', output, re.MULTILINE)
+    skipped = re.search(r'skipped=(\d+)', output)
+    return dict(passed=returncode == 0 and bool(ran) and not skipped, tests=int(ran.group(1)) if ran else 0,
+                skipped=int(skipped.group(1)) if skipped else 0, returncode=returncode,
+                timed_out=timed_out, output=output)
+
+
+@app.function(**L4_REMOTE)
+def unit_test_remote(sources: dict[str, str]) -> dict:
+    """Repair-stage unit tests on L4; never a latency or keep gate."""
+    started = time.perf_counter()
+    verify_runtime()
+    cpu_diagnostics()
+    with tempfile.TemporaryDirectory() as tmp:
+        result = run_unit_suite(sources, Path(tmp))
+    result['gpu_seconds'] = time.perf_counter() - started
+    result['gpu_tier'] = 'L4'
+    print(f"Unit tests: passed={result['passed']} tests={result['tests']} skipped={result['skipped']}; "
+          f"Estimated GPU seconds consumed: {result['gpu_seconds']:.2f}", flush=True)
+    return result
+
+
 @app.function(**REMOTE)
 def judge_remote(engine_tar: bytes, workloads: list, samples: int = 3, refresh_native: bool = False,
                  native: dict | None = None, correctness_only: bool = False, transport: str = "json") -> dict:
