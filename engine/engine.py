@@ -102,10 +102,18 @@ class Engine:
         if DECODE_CONFIG["attention_impl"] == "sdpa_grouped":
             self.decode_mask.index_fill_(3, self.cache_position, True)
         torch.index_select(self.embedding, 0, self.flat_token_ids, out=self.buffers.x)
+        fuse = DECODE_CONFIG["fuse_norm_residual"]
         for i, weights in enumerate(self.layers):
             self.buffers.layer(weights, self.cache.key_cache[i], self.cache.value_cache[i],
-                               self.cache_position, self.cos, self.sin, self.decode_mask)
-        self.norm_out(self.buffers.x, self.final_norm, self.buffers.norm, self.final_eps)
+                               self.cache_position, self.cos, self.sin, self.decode_mask,
+                               carry_in=fuse and i > 0, defer_out=fuse)
+        if fuse:
+            # The last down projection is still pending in branch; the final
+            # norm consumes it as its residual and stores the rounded sum in x.
+            self.norm_out(self.buffers.branch, self.final_norm, self.buffers.norm,
+                          self.final_eps, self.buffers.x, self.buffers.x)
+        else:
+            self.norm_out(self.buffers.x, self.final_norm, self.buffers.norm, self.final_eps)
         torch.mm(self.buffers.norm, self.lm_head, out=self.logits)
         # torch.argmax chooses the lowest vocabulary index on exact ties.
         torch.argmax(self.logits, dim=-1, keepdim=True, out=self.next_tokens)

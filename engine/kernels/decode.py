@@ -34,8 +34,18 @@ class DecodeBuffers:
         self.partial = torch.empty((batch, 32, splits, 128), device=device, dtype=torch.float32)
         self.lse = torch.empty((batch, 32, splits), device=device, dtype=torch.float32)
 
-    def layer(self, w, k, v, position, cos, sin, mask):
-        norm_out(self.x, w.input_norm, self.norm, w.eps)
+    def layer(self, w, k, v, position, cos, sin, mask, carry_in=False, defer_out=False):
+        """One decoder layer on fixed buffers.
+
+        With fuse_norm_residual, carry_in folds the previous layer's pending
+        down-projection output (still in branch) into this layer's input norm,
+        and defer_out leaves this layer's down output in branch for the next
+        norm instead of adding it into x. Defaults reproduce the unfused chain.
+        """
+        if carry_in and self.config['fuse_norm_residual']:
+            norm_out(self.branch, w.input_norm, self.norm, w.eps, self.x, self.x)
+        else:
+            norm_out(self.x, w.input_norm, self.norm, w.eps)
         torch.mm(self.norm, w.qkv, out=self.qkv)
         qk_rope_cache_out(self.qkv, w.q_norm, w.k_norm, cos, sin, position,
                           self.q, k, v, self.qk_scratch, self.config['fuse_qk_norm_rope'])
@@ -57,7 +67,8 @@ class DecodeBuffers:
         torch.mm(self.norm, w.gate_up, out=self.gate_up)
         silu_mul_out(self.gate_up, self.product, self.activation, self.config['fuse_silu_mul'])
         torch.mm(self.product, w.down, out=self.branch)
-        torch.add(self.x, self.branch, out=self.x)
+        if not (defer_out and self.config['fuse_norm_residual']):
+            torch.add(self.x, self.branch, out=self.x)
 
 
 def cache_storage(batch, capacity, device, layout):
