@@ -4,7 +4,7 @@ cuBLAS at M <= 16 launches 40 to 96 blocks for these widths and leaves a third
 of an H100 idle. Each program here streams BLOCK_N weight rows over all of K,
 accumulates in fp32 on tensor cores, and rounds once to BF16, which is the
 reference's rounding point. The tile width is chosen so at least MIN_PROGRAMS
-programs run; W is the contiguous [N, K] module weight and x is contiguous.
+programs run. W is the contiguous [N, K] module weight and x is contiguous.
 """
 
 import triton
