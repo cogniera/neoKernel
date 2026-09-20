@@ -39,3 +39,27 @@ def norm_out(x, weight, out, eps=1e-6, residual=None, summed=None):
                          x.shape[-1], eps, residual is not None, block,
                          num_warps=TUNABLES["norm.num_warps"],
                          num_stages=TUNABLES["norm.num_stages"], enable_fp_fusion=False)
+
+
+@triton.jit
+def _embedding_norm(E, IDS, W, X, N, H: tl.constexpr, EPS: tl.constexpr,
+                    BLOCK: tl.constexpr):
+    b = tl.program_id(0)
+    h = tl.arange(0, BLOCK)
+    token = tl.load(IDS + b)
+    x = tl.load(E + token * H + h, h < H, 0.).to(tl.float32)
+    tl.store(X + b * H + h, x, h < H)
+    inv = tl.rsqrt(tl.sum(x * x, 0) / H + EPS)
+    normalized = (x * inv).to(tl.bfloat16).to(tl.float32)
+    gain = tl.load(W + h, h < H, 0.).to(tl.float32)
+    tl.store(N + b * H + h, normalized * gain, h < H)
+
+
+def embedding_norm_out(embedding, ids, weight, x, normalized, eps):
+    """Gather input embeddings and compute the first layer's norm in one launch."""
+    width = x.shape[-1]
+    _embedding_norm[(x.shape[0],)](
+        embedding, ids, weight, x, normalized, width, eps,
+        triton.next_power_of_2(width), num_warps=4, num_stages=1,
+        enable_fp_fusion=False,
+    )

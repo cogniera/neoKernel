@@ -289,6 +289,13 @@
       "score": 837.1,
       "source": "User reported score in chat; run ID and per-workload measurements were not supplied.",
       "note": "Reported improvement over 774.9. This is the baseline for the next candidate, not a measured result for the packed-prefill change."
+    },
+    {
+      "commit": "ffcf084",
+      "label": "packed prefill and fused rotary/cache/residual operations",
+      "score": 859.0,
+      "source": "User reported score in chat; run ID and workload details not supplied.",
+      "note": "Measured baseline for the combined decode candidate; no claim about the new candidate score."
     }
   ]
 }

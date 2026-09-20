@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from kernels import CONFIG, TUNABLES
 from kernels.elementwise import norm_out, qk_rope_cache_out, silu_mul_out
-from kernels.attention import attention_out
+from kernels.attention import attention_out, online_out
 from kernels.gemm import skinny_mm
 from kernels.weights import LayerWeights
 
@@ -12,6 +12,7 @@ from kernels.weights import LayerWeights
 class DecodeBuffers:
     def __init__(self, batch, capacity, device, config=None):
         self.config = dict(CONFIG if config is None else config)
+        self.attention_mode = "split128"
         if self.config['attention_impl'] not in ('triton', 'sdpa_grouped'):
             raise ValueError('invalid attention_impl')
         if self.config['kv_layout'] not in ('bhsd', 'bshd'):
@@ -32,11 +33,11 @@ class DecodeBuffers:
         self.gate_up = alloc(batch, 19456)
         self.product = alloc(batch, 9728)
         self.activation = alloc(batch, 9728)
-        splits = (capacity + TUNABLES['attention.BLOCK'] - 1) // TUNABLES['attention.BLOCK']
+        splits = (capacity + 127) // 128
         self.partial = torch.empty((batch, 32, splits, 128), device=device, dtype=torch.float32)
         self.lse = torch.empty((batch, 32, splits), device=device, dtype=torch.float32)
 
-    def layer(self, w, k, v, position, cos, sin, mask, carry_in=False, defer_out=False):
+    def layer(self, w, k, v, position, cos, sin, mask, carry_in=False, defer_out=False, normalized_input=False):
         """One decoder layer on fixed buffers.
 
         With fuse_norm_residual, carry_in folds the previous layer's pending
@@ -46,20 +47,12 @@ class DecodeBuffers:
         """
         if carry_in and self.config['fuse_norm_residual']:
             norm_out(self.branch, w.input_norm, self.norm, w.eps, self.x, self.x)
-        else:
+        elif not normalized_input:
             norm_out(self.x, w.input_norm, self.norm, w.eps)
         self.mm(self.norm, w.qkv, self.qkv)
         qk_rope_cache_out(self.qkv, w.q_norm, w.k_norm, cos, sin, position,
                           self.q, k, v, self.qk_scratch, self.config['fuse_qk_norm_rope'])
-        if self.config['attention_impl'] == 'triton':
-            attention_out(self.q, k, v, position, self.attn, self.partial, self.lse)
-        else:
-            # Four query rows per KV head; all four use the same visible prefix.
-            # SDPA's output/workspace is owned by the CUDA graph's private pool.
-            grouped = F.scaled_dot_product_attention(self.q_grouped, k, v,
-                                                      attn_mask=mask, is_causal=False,
-                                                      scale=128 ** -0.5)
-            self.attn_grouped.copy_(grouped)
+        self.attend(k, v, position, mask)
         self.mm(self.attn_flat, w.o, self.branch)
         if self.config['fuse_norm_residual']:
             norm_out(self.branch, w.post_norm, self.norm, w.eps, self.x, self.x)
@@ -71,6 +64,25 @@ class DecodeBuffers:
         self.mm(self.product, w.down, self.branch)
         if not (defer_out and self.config['fuse_norm_residual']):
             torch.add(self.x, self.branch, out=self.x)
+
+    def attend(self, k, v, position, mask):
+        if self.config['attention_impl'] == 'triton':
+            if self.attention_mode == 'online':
+                online_out(self.q, k, v, position, self.attn)
+            else:
+                block = 256 if self.attention_mode == 'split256' else 128
+                attention_out(self.q, k, v, position, self.attn, self.partial, self.lse, block)
+        else:
+            grouped = F.scaled_dot_product_attention(self.q_grouped, k, v,
+                                                      attn_mask=mask, is_causal=False,
+                                                      scale=128 ** -0.5)
+            self.attn_grouped.copy_(grouped)
+
+    def finish_norm(self, weight, eps):
+        if self.config['fuse_norm_residual']:
+            norm_out(self.branch, weight, self.norm, eps, self.x, self.x)
+        else:
+            norm_out(self.x, weight, self.norm, eps)
 
 
 def cache_storage(batch, capacity, device, layout):

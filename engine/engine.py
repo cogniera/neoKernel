@@ -76,13 +76,16 @@ def qwen_forward(model, input_ids, cache, packed_layers):
 
 class Engine:
     def __init__(self, model_path):
-        # Lazy device imports allow the native-prefill CPU regression to run on
-        # hosts without Triton. These execute during loading, never in a step.
         from kernels.decode import DecodeBuffers
+        from kernels.split_decode import SplitDecodeBuffers
         from kernels.weights import LayerWeights
-        from kernels.rmsnorm import norm_out
+        from kernels.head import Head, commit_step
+        from kernels.rmsnorm import embedding_norm_out
         self.buffer_type = DecodeBuffers
-        self.norm_out = norm_out
+        self.split_buffer_type = SplitDecodeBuffers
+        self.head_type = Head
+        self.commit_step = commit_step
+        self.embedding_norm_out = embedding_norm_out
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -102,27 +105,33 @@ class Engine:
     def prepare(self, batch, prompt_length, output_length):
         self.graph = None
         self.prefill_graph = None
-        self.prompt_ids = torch.empty((batch, prompt_length), device="cuda:0", dtype=torch.int64)
         self.shape = (batch, prompt_length, output_length)
+        self.prompt_ids = torch.empty((batch, prompt_length), device="cuda:0", dtype=torch.int64)
+        self.host_prompt = torch.empty((batch, prompt_length), dtype=torch.int64, pin_memory=True)
         capacity = prompt_length + output_length
         self.cache = PrefixStaticCache(
             self.model.config, max_batch_size=batch, max_cache_len=capacity,
             device="cuda:0", dtype=torch.bfloat16, layout=DECODE_CONFIG["kv_layout"],
         )
-        self.prefill_positions = torch.arange(prompt_length, device="cuda:0")
         self.decode_mask = torch.zeros((batch, 1, 1, capacity), device="cuda:0", dtype=torch.bool)
         self.token_ids = torch.zeros((batch, 1), device="cuda:0", dtype=torch.int64)
-        self.cache_position = torch.zeros((1,), device="cuda:0", dtype=torch.int64)
-        self.position_ids = self.cache_position.view(1, 1)
         self.flat_token_ids = self.token_ids.view(batch)
         self.next_tokens = torch.empty_like(self.token_ids)
-        # Two pinned landing buffers and two streams: step t+1 is queued on the
-        # GPU before the host waits for token t, so the yield never idles the GPU.
-        self.host_tokens = [torch.empty((batch, 1), dtype=torch.int64, pin_memory=True) for _ in range(2)]
-        self.copy_streams = [torch.cuda.Stream() for _ in range(2)]
-        self.buffers = self.buffer_type(batch, capacity, "cuda:0", DECODE_CONFIG)
-        self.logits = torch.empty((batch, self.model.config.vocab_size),
-                                  device="cuda:0", dtype=torch.bfloat16)
+        self.cache_position = torch.zeros((1,), device="cuda:0", dtype=torch.int64)
+        # Each generated token has a stable landing row. Copies never race with
+        # a later step's token_ids update, so compute need not wait for copies.
+        self.output_tokens = torch.empty((output_length, batch), device="cuda:0", dtype=torch.int64)
+        self.host_tokens = torch.empty((output_length, batch), dtype=torch.int64, pin_memory=True)
+        self.copy_stream = torch.cuda.Stream()
+        self.ready_events = [torch.cuda.Event() for _ in range(output_length)]
+        self.done_events = [torch.cuda.Event() for _ in range(output_length)]
+        self.buffer_options = {"cublas": self.buffer_type(batch, capacity, "cuda:0", DECODE_CONFIG)}
+        if batch <= 32 and DECODE_CONFIG["fuse_norm_residual"]:
+            self.buffer_options["splitk"] = self.split_buffer_type(batch, capacity, "cuda:0", DECODE_CONFIG)
+        self.buffers = self.buffer_options["cublas"]
+        self.fused_head = False
+        self.head = self.head_type(batch, self.model.config.vocab_size, self.embedding.shape[1], "cuda:0")
+        self.logits = torch.empty((batch, self.model.config.vocab_size), device="cuda:0", dtype=torch.bfloat16)
         positions = torch.arange(capacity, device="cuda:0").unsqueeze(0)
         cos, sin = self.model.model.rotary_emb(self.buffers.x, positions)
         self.cos = cos[0].contiguous()
@@ -131,43 +140,89 @@ class Engine:
     def decode(self):
         if DECODE_CONFIG["attention_impl"] == "sdpa_grouped":
             self.decode_mask.index_fill_(3, self.cache_position, True)
-        torch.index_select(self.embedding, 0, self.flat_token_ids, out=self.buffers.x)
+        self.embedding_norm_out(self.embedding, self.flat_token_ids, self.layers[0].input_norm,
+                                self.buffers.x, self.buffers.norm, self.layers[0].eps)
         fuse = DECODE_CONFIG["fuse_norm_residual"]
         for i, weights in enumerate(self.layers):
             self.buffers.layer(weights, self.cache.key_cache[i], self.cache.value_cache[i],
                                self.cache_position, self.cos, self.sin, self.decode_mask,
-                               carry_in=fuse and i > 0, defer_out=fuse)
-        if fuse:
-            # The last down projection is still pending in branch; the final
-            # norm consumes it as its residual and stores the rounded sum in x.
-            self.norm_out(self.buffers.branch, self.final_norm, self.buffers.norm,
-                          self.final_eps, self.buffers.x, self.buffers.x)
+                               carry_in=fuse and i > 0, defer_out=fuse, normalized_input=i == 0)
+        self.buffers.finish_norm(self.final_norm, self.final_eps)
+        if self.fused_head:
+            self.head.out(self.buffers.norm, self.embedding, self.next_tokens)
         else:
-            self.norm_out(self.buffers.x, self.final_norm, self.buffers.norm, self.final_eps)
-        torch.mm(self.buffers.norm, self.lm_head, out=self.logits)
-        # torch.argmax chooses the lowest vocabulary index on exact ties.
-        torch.argmax(self.logits, dim=-1, keepdim=True, out=self.next_tokens)
+            torch.mm(self.buffers.norm, self.lm_head, out=self.logits)
+            torch.argmax(self.logits, dim=-1, keepdim=True, out=self.next_tokens)
         return self.next_tokens
 
+    def reset_decode(self):
+        # Only positions below prompt_length are valid after a reset. Prefill
+        # overwrites those slots for every generate(), including after warmup.
+        prompt_length = self.shape[1]
+        self.cache_position.fill_(prompt_length)
+        self.token_ids.copy_(self.output_tokens[0].view(-1, 1))
+        if DECODE_CONFIG["attention_impl"] == "sdpa_grouped":
+            self.decode_mask.zero_()
+            self.decode_mask[:, :, :, :prompt_length].fill_(True)
+
     def capture_decode(self):
+        """Choose an entire decode graph during untimed, shape-specific warmup.
+
+        Both projection paths evaluate the full model. Attention always reads
+        the full visible cache, and both heads evaluate the entire vocabulary.
+        A variant must beat the current best by 3% to replace it. Selection is
+        fixed for later samples; timing data and warmup tokens are not reused.
+        """
+        batch, prompt_length, output_length = self.shape
         stream = torch.cuda.Stream()
         stream.wait_stream(torch.cuda.current_stream())
+        attention_modes = ["split128"]
+        if DECODE_CONFIG["attention_impl"] == "triton":
+            attention_modes.append("online" if batch >= 8 else "split256")
+        heads = [False, True] if batch <= 32 else [False]
+        timed_steps = min(3, output_length - 1)
+        best = None
         with torch.cuda.stream(stream):
-            for _ in range(3):
-                self.decode()
+            for projection, buffers in self.buffer_options.items():
+                self.buffers = buffers
+                for attention in attention_modes:
+                    buffers.attention_mode = attention
+                    for fused_head in heads:
+                        self.fused_head = fused_head
+                        self.reset_decode()
+                        for _ in range(2):
+                            self.decode()
+                        graph = torch.cuda.CUDAGraph()
+                        with torch.cuda.graph(graph, stream=stream):
+                            self.decode()
+                            self.commit_step(self.next_tokens, self.token_ids, self.output_tokens,
+                                             self.cache_position, prompt_length)
+                        elapsed = []
+                        for _ in range(3):
+                            self.reset_decode()
+                            start = torch.cuda.Event(enable_timing=True)
+                            end = torch.cuda.Event(enable_timing=True)
+                            start.record(stream)
+                            for _ in range(timed_steps):
+                                graph.replay()
+                            end.record(stream)
+                            end.synchronize()
+                            elapsed.append(start.elapsed_time(end) / timed_steps)
+                        median = sorted(elapsed)[1]
+                        if best is None or median < best[0] * 0.97:
+                            best = (median, graph, projection, attention, fused_head)
         torch.cuda.current_stream().wait_stream(stream)
-        self.graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(self.graph, stream=stream):
-            self.next_tokens = self.decode()
-            # One replay is a complete step: it consumes token_ids at the
-            # current position and leaves the next token and position in place.
-            self.token_ids.copy_(self.next_tokens)
-            self.cache_position.add_(1)
-        torch.cuda.current_stream().wait_stream(stream)
+        _, self.graph, projection, attention, self.fused_head = best
+        self.buffers = self.buffer_options[projection]
+        self.buffers.attention_mode = attention
+        self.reset_decode()
+        print("decode plan: " + projection + "/" + attention +
+              ("/fused-head" if self.fused_head else "/cublas-head"), flush=True)
 
     def prefill(self):
         logits = qwen_forward(self.model, self.prompt_ids, self.cache, self.layers)
         self.token_ids.copy_(logits[:, -1, :].argmax(dim=-1, keepdim=True))
+        self.output_tokens[0].copy_(self.flat_token_ids)
 
     def capture_prefill(self):
         stream = torch.cuda.Stream()
@@ -181,17 +236,17 @@ class Engine:
             self.prefill()
         torch.cuda.current_stream().wait_stream(stream)
 
-    def fetch(self, slot):
-        """Queue an async copy of the current token_ids; the next step waits for it on the device."""
-        stream = self.copy_streams[slot]
-        stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(stream):
-            self.host_tokens[slot].copy_(self.token_ids, non_blocking=True)
-        torch.cuda.current_stream().wait_stream(stream)
+    def fetch(self, step):
+        self.ready_events[step].record(torch.cuda.current_stream())
+        with torch.cuda.stream(self.copy_stream):
+            self.copy_stream.wait_event(self.ready_events[step])
+            self.host_tokens[step].copy_(self.output_tokens[step], non_blocking=True)
+            self.done_events[step].record(self.copy_stream)
 
-    def emit(self, slot):
-        self.copy_streams[slot].synchronize()
-        return self.host_tokens[slot][:, 0].tolist()
+    def emit(self, step):
+        # Wait only for this token's copy, not later queued copies or compute.
+        self.done_events[step].synchronize()
+        return self.host_tokens[step].tolist()
 
     def generate(self, input_ids, max_new_tokens):
         if max_new_tokens <= 0:
@@ -200,20 +255,21 @@ class Engine:
         with torch.inference_mode():
             if self.shape != (batch, prompt_length, max_new_tokens):
                 self.prepare(batch, prompt_length, max_new_tokens)
-            self.decode_mask.zero_()
-            self.decode_mask[:, :, :, :prompt_length].fill_(True)
-            self.cache_position.fill_(prompt_length)
-            self.prompt_ids.copy_(torch.tensor(input_ids, dtype=torch.int64, device="cuda:0"))
-            self.cache.prefill_length = prompt_length
+            self.host_prompt.copy_(torch.tensor(input_ids, dtype=torch.int64))
+            self.prompt_ids.copy_(self.host_prompt, non_blocking=True)
             if self.prefill_graph is None:
                 self.capture_prefill()
             self.prefill_graph.replay()
-            self.cache.prefill_length = 0
+            self.reset_decode()
             if max_new_tokens > 1 and self.graph is None:
                 self.capture_decode()
             self.fetch(0)
-            for step in range(1, max_new_tokens):
-                self.graph.replay()
-                self.fetch(step % 2)
-                yield self.emit((step - 1) % 2)
-            yield self.emit((max_new_tokens - 1) % 2)
+            queued = 0
+            for step in range(max_new_tokens):
+                # A bounded lookahead keeps the GPU busy while Python yields.
+                # Every step has distinct device/host storage, including tails.
+                while queued < min(max_new_tokens - 1, step + 2):
+                    self.graph.replay()
+                    queued += 1
+                    self.fetch(queued)
+                yield self.emit(step)
