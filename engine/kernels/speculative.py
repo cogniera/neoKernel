@@ -1,10 +1,18 @@
 """Draft-tree expansion, exact greedy acceptance, and cache compaction on device.
 
-The draft source is the target's own recent predictions: TABLE[t] holds the
-top-k next tokens the target computed the last time token t was an input
-(seeded from the prompt's bigrams). Drafts never authorize output: every
-emitted token is the argmax the target computed on the accepted prefix, and
-a draft node only extends the path when its token equals that argmax.
+The draft source is the target's own recent predictions: TABLE[b, t] holds the
+top-k next tokens the target computed the last time token t was an input in
+sequence b (seeded from that sequence's prompt bigrams). Drafts never authorize
+output: every emitted token is the argmax the target computed on the accepted
+prefix, and a draft node only extends the path when its token equals that argmax.
+
+The table is per sequence, not shared. Rows are keyed by token id, so one table
+would be written by every sequence at once and the winner of a collision would
+be whichever program happened to land last; the drafts, the accepted run length
+and therefore the step schedule would all vary between two calls on the same
+prompt. One slice per sequence makes every write deterministic without
+serializing anything, and keeps one sequence's continuations out of another's
+drafts. TS is the stride between slices.
 
 context is int64 [B,C]; count[b] is the number of committed tokens, whose last
 one (the root) has no cache entry yet. base[b] = count[b]-1 is the root's slot.
@@ -33,9 +41,10 @@ def _find(row, n, NGRAM: tl.constexpr, C: tl.constexpr, BLOCK: tl.constexpr):
 @triton.jit
 def _draft(CTX, COUNT, TABLE, PARENT, RANK, DEPTH, SPINE, TOKENS, BASE,
            C: tl.constexpr, T: tl.constexpr, TP: tl.constexpr, K: tl.constexpr,
-           MAXDEPTH: tl.constexpr, NGRAM: tl.constexpr, BLOCK: tl.constexpr):
+           TS: tl.constexpr, MAXDEPTH: tl.constexpr, NGRAM: tl.constexpr, BLOCK: tl.constexpr):
     b = tl.program_id(0)
     n = tl.load(COUNT + b)
+    table = TABLE + b.to(tl.int64) * TS
     row = CTX + b * C
     root = tl.load(row + n - 1).to(tl.int32)
     idx = tl.arange(0, TP)
@@ -52,7 +61,7 @@ def _draft(CTX, COUNT, TABLE, PARENT, RANK, DEPTH, SPINE, TOKENS, BASE,
         # Every node at this level extends its parent's token, resolved last level.
         ptok = tl.sum(tl.where(idx[None, :] == parent[:, None], toks[None, :], 0), 1)
         at = depth == level
-        cand = tl.load(TABLE + ptok.to(tl.int64) * K + rank, at, 0)
+        cand = tl.load(table + ptok.to(tl.int64) * K + rank, at, 0)
         source = found + NGRAM - 1 + level
         use = (found >= 0) & (source < n)
         lookup = tl.load(row + tl.where(use, source, 0)).to(tl.int32)
@@ -65,34 +74,48 @@ def _draft(CTX, COUNT, TABLE, PARENT, RANK, DEPTH, SPINE, TOKENS, BASE,
 def draft_out(context, count, table, tree, tokens, base, ngram=3):
     batch, capacity = context.shape
     _draft[(batch,)](context, count, table, tree.parent, tree.rank, tree.depth, tree.spine, tokens, base,
-                     capacity, tree.nodes, triton.next_power_of_2(tree.nodes), table.shape[1],
-                     tree.max_depth, ngram, 1024, num_warps=4)
+                     capacity, tree.nodes, triton.next_power_of_2(tree.nodes), table.shape[2],
+                     table.stride(0), tree.max_depth, ngram, 1024, num_warps=4)
 
 
 @triton.jit
-def _warm(TOK, TOPK, TABLE, W: tl.constexpr, TS: tl.constexpr, K: tl.constexpr):
+def _seed(PROMPT, TOPK, TABLE, PS: tl.constexpr, W: tl.constexpr, LIMIT: tl.constexpr,
+          N: tl.constexpr, K: tl.constexpr, TS: tl.constexpr):
+    """Bigrams for the positions no warm pass covers, then the target's own top-k."""
     b = tl.program_id(0)
     kk = tl.arange(0, K)
+    table = TABLE + b.to(tl.int64) * TS
+    row = PROMPT + b * PS
+    # Ascending, one position at a time: a token repeated in the prompt must end
+    # up with what followed its LAST occurrence, whichever program runs it.
+    for i in range(0, LIMIT):
+        tok = tl.load(row + i).to(tl.int64)
+        tl.store(table + tok * K, tl.load(row + i + 1).to(tl.int32))
     for i in range(0, W):
-        tok = tl.load(TOK + b * TS + i)
-        tl.store(TABLE + tok * K + kk, tl.load(TOPK + (b * W + i) * K + kk).to(tl.int32))
+        tok = tl.load(row + N - W + i).to(tl.int64)
+        tl.store(table + tok * K + kk, tl.load(TOPK + (b * W + i) * K + kk).to(tl.int32))
 
 
-def warm_out(tokens, topk, table):
-    """table[tokens[b, i]] = topk[b*W + i] in position order, so later positions win."""
-    batch, window = tokens.shape
-    if topk.shape != (batch * window, table.shape[1]) or tokens.stride(1) != 1:
-        raise ValueError("warm_out expects [B*W, K] predictions for a [B, W] token view")
-    _warm[(batch,)](tokens, topk, table, window, tokens.stride(0), table.shape[1], num_warps=4)
+def seed_out(prompt, topk, table, window):
+    """table[b, prompt[b, i]] = the target's top-k at position i, later positions winning."""
+    batch, length = prompt.shape
+    if window and topk.shape != (batch * window, table.shape[2]):
+        raise ValueError("seed_out expects [B*W, K] predictions for the last W prompt positions")
+    if prompt.stride(1) != 1 or table.shape[0] != batch:
+        raise ValueError("seed_out expects a contiguous [B, N] prompt and one table slice per sequence")
+    _seed[(batch,)](prompt, topk, table, prompt.stride(0), window,
+                    max(0, min(length - 1, length - window)), length, table.shape[2],
+                    table.stride(0), num_warps=4)
 
 
 @triton.jit
 def _accept(TOKENS, TOPK, CHILD, CTX, COUNT, TABLE, STEP, PACKET, PATH, ACCEPTED,
             C: tl.constexpr, T: tl.constexpr, K: tl.constexpr, MC: tl.constexpr, MCP: tl.constexpr,
             MAXDEPTH: tl.constexpr, DP: tl.constexpr, WIDTH: tl.constexpr, PW: tl.constexpr,
-            PROMPT: tl.constexpr, OUTPUT: tl.constexpr, STEPS: tl.constexpr):
+            PROMPT: tl.constexpr, OUTPUT: tl.constexpr, STEPS: tl.constexpr, TS: tl.constexpr):
     b = tl.program_id(0)
     n = tl.load(COUNT + b)
+    table = TABLE + b.to(tl.int64) * TS
     c = tl.arange(0, MCP)
     di = tl.arange(0, DP)
     kk = tl.arange(0, K)
@@ -132,13 +155,13 @@ def _accept(TOKENS, TOPK, CHILD, CTX, COUNT, TABLE, STEP, PACKET, PATH, ACCEPTED
     # written last so verified contexts win over rejected branches.
     for j in tl.static_range(T):
         tok = tl.load(TOKENS + b * T + j)
-        tl.store(TABLE + tok * K + kk, tl.load(TOPK + (b * T + j) * K + kk).to(tl.int32))
+        tl.store(table + tok * K + kk, tl.load(TOPK + (b * T + j) * K + kk).to(tl.int32))
     for i in tl.static_range(MAXDEPTH + 1):
         node = tl.sum(tl.where(di == i, path, 0), 0)
         on = ((i <= accepted) & (node >= 0)) | (kk < 0)
         safe = tl.where(node >= 0, node, 0)
         tok = tl.load(TOKENS + b * T + safe)
-        tl.store(TABLE + tok * K + kk, tl.load(TOPK + (b * T + safe) * K + kk).to(tl.int32), on)
+        tl.store(table + tok * K + kk, tl.load(TOPK + (b * T + safe) * K + kk).to(tl.int32), on)
 
 
 def accept_out(tokens, topk, tree, context, count, table, step, packet, path, accepted,
@@ -148,10 +171,10 @@ def accept_out(tokens, topk, tree, context, count, table, step, packet, path, ac
     if width != tree.max_depth + 3 or path.shape[1] < tree.max_depth + 1:
         raise ValueError("packet needs max_depth + 3 columns and path max_depth + 1")
     _accept[(batch,)](tokens, topk, tree.child, context, count, table, step, packet, path, accepted,
-                      capacity, tree.nodes, table.shape[1], tree.max_children,
+                      capacity, tree.nodes, table.shape[2], tree.max_children,
                       triton.next_power_of_2(tree.max_children), tree.max_depth,
                       triton.next_power_of_2(tree.max_depth + 1), width, path.shape[1],
-                      prompt_length, output_length, schedule_steps, num_warps=4)
+                      prompt_length, output_length, schedule_steps, table.stride(0), num_warps=4)
 
 
 @triton.jit

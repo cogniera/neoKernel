@@ -186,20 +186,23 @@ class HandRolledKernelTests(unittest.TestCase):
             self.assertTrue(buf.attn.isfinite().all().item())
 
     @torch.inference_mode() if GPU else (lambda f: f)
-    def test_warm(self):
-        from kernels.speculative import warm_out
-        vocab, batch, window = 500, 3, 40
-        table = torch.randint(0, vocab, (vocab, 8), device='cuda', dtype=torch.int32)
-        before = table.clone()
-        # Distinct tokens across sequences: programs racing on one row would be arbitrary.
-        prompt = torch.randperm(vocab, device='cuda')[:batch * 64].view(batch, 64).contiguous()
-        prompt[1, 64 - window + 3] = prompt[1, 64 - 5]
+    def test_seed(self):
+        from kernels.speculative import seed_out
+        vocab, batch, length, window = 500, 3, 64, 40
+        table = torch.randint(0, vocab, (batch, vocab, 8), device='cuda', dtype=torch.int32)
+        expected = table.clone()
+        # Tokens repeat within and across sequences: each slice must still be exact.
+        prompt = torch.randint(0, vocab, (batch, length), device='cuda')
+        prompt[1, length - window + 3] = prompt[1, length - 5]
+        prompt[2, 4] = prompt[2, 9]
+        prompt[0] = prompt[1]
         topk = torch.randint(0, vocab, (batch * window, 8), device='cuda')
-        warm_out(prompt[:, 64 - window:], topk, table)
-        expected = before.clone()
+        seed_out(prompt, topk, table, window)
         for b in range(batch):
+            for i in range(length - window):
+                expected[b, prompt[b, i], 0] = prompt[b, i + 1].to(torch.int32)
             for i in range(window):
-                expected[prompt[b, 64 - window + i]] = topk[b * window + i].to(torch.int32)
+                expected[b, prompt[b, length - window + i]] = topk[b * window + i].to(torch.int32)
         torch.testing.assert_close(table, expected, atol=0, rtol=0)
 
     @torch.inference_mode() if GPU else (lambda f: f)
@@ -212,7 +215,7 @@ class HandRolledKernelTests(unittest.TestCase):
             capacity = prompt + output + nodes
             spine = tree.spine.tolist()
             for trial in range(3):
-                table = torch.randint(0, vocab, (vocab, 8), device='cuda', dtype=torch.int32)
+                table = torch.randint(0, vocab, (batch, vocab, 8), device='cuda', dtype=torch.int32)
                 context = torch.randint(0, vocab, (batch, prompt + output + depth + 1), device='cuda')
                 count = torch.randint(prompt + 1, prompt + output + 1, (batch,), device='cuda')
                 if trial == 0:
@@ -238,7 +241,7 @@ class HandRolledKernelTests(unittest.TestCase):
                         if spine[j] == d and found >= 0 and found + 2 + d < n:
                             expect[b, j] = row[found + 2 + d]
                         else:
-                            expect[b, j] = table[expect[b, tree.parent_list[j]], tree.rank_list[j]]
+                            expect[b, j] = table[b, expect[b, tree.parent_list[j]], tree.rank_list[j]]
                 torch.testing.assert_close(tokens, expect, atol=0, rtol=0)
                 torch.testing.assert_close(base, count - 1, atol=0, rtol=0)
                 # Predictions: force partial agreement so paths of every length occur.
@@ -283,19 +286,14 @@ class HandRolledKernelTests(unittest.TestCase):
                     self.assertEqual(count[b].item(), min(n + allowed + 1, prompt + output))
                     self.assertEqual(context[b, n:n + allowed + 1].tolist(), emitted[:allowed + 1])
                     torch.testing.assert_close(context[b, :n], before_context[b, :n], atol=0, rtol=0)
-                    # Within a sequence the accepted path's rows win the table; another
-                    # sequence's program may still overwrite a shared token afterwards.
-                    elsewhere = [t for bb, row in enumerate(all_tokens) if bb != b for t in row]
-                    on_path = [all_tokens[b][i] for i in walk[:allowed + 1]]
-                    for i in walk[:allowed + 1]:
-                        if all_tokens[b][i] not in elsewhere and on_path.count(all_tokens[b][i]) == 1:
-                            torch.testing.assert_close(table[all_tokens[b][i]], topk[b * nodes + i].to(torch.int32),
-                                                       atol=0, rtol=0)
-                    seen = [t for row in all_tokens for t in row]
-                    for j in range(nodes):
-                        tok = all_tokens[b][j]
-                        if seen.count(tok) == 1:
-                            torch.testing.assert_close(table[tok], topk[b * nodes + j].to(torch.int32), atol=0, rtol=0)
+                    # The table is this sequence's alone, so every row it writes is exact:
+                    # all nodes in order, then the accepted path, and the last writer wins.
+                    winner = {}
+                    for node in list(range(nodes)) + walk[:allowed + 1]:
+                        winner[all_tokens[b][node]] = node
+                    for tok, node in winner.items():
+                        torch.testing.assert_close(table[b, tok], topk[b * nodes + node].to(torch.int32),
+                                                   atol=0, rtol=0)
                 # Compaction moves accepted nodes' rows into path order for every layer.
                 for layout in ('bhsd', 'bshd'):
                     k = cache_storage(batch, capacity, 'cuda', layout, layers)

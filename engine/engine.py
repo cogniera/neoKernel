@@ -15,7 +15,7 @@ from transformers import AutoModelForCausalLM
 from kernels import CONFIG
 from kernels.prefill import norm, add_norm, qkv_cache, packed_silu_mul
 from kernels.rmsnorm import norm_out
-from kernels.speculative import draft_out, accept_out, compact_out, warm_out
+from kernels.speculative import draft_out, accept_out, compact_out, seed_out
 from kernels.tree import DraftTree
 from kernels.tree_decode import TreeDecodeBuffers, cache_storage
 from kernels.weights import LayerWeights
@@ -109,7 +109,6 @@ class Engine:
         self.ranks = DECODE_CONFIG["draft_ranks"]
         # Fresh draft table for every prompt: rank r of token t starts as t itself.
         self.identity = torch.arange(vocab, device="cuda:0", dtype=torch.int32)[:, None].expand(vocab, self.ranks).contiguous()
-        self.table = torch.empty_like(self.identity)
         self.shape = None
         self.graph = None
         self.prefill_graph = None
@@ -120,6 +119,8 @@ class Engine:
         self.shape = (batch, prompt_length, output_length)
         vocab = self.model.config.vocab_size
         self.tree = DraftTree(draft_nodes(batch) if output_length > 1 else 1, self.ranks, "cuda:0")
+        # One draft table per sequence, so no two sequences race for a token's row.
+        self.table = torch.empty((batch, vocab, self.ranks), device="cuda:0", dtype=torch.int32)
         nodes, depth = self.tree.nodes, self.tree.max_depth
         self.steps = schedule_steps(batch, output_length)
         capacity = prompt_length + output_length + nodes
@@ -210,11 +211,9 @@ class Engine:
         self.count.fill_(prompt_length + 1)
         self.step.fill_(1)
         self.table.copy_(self.identity)
-        if prompt_length > 1:
-            self.table[:, 0].scatter_(0, self.prompt_ids[:, :-1].reshape(-1),
-                                      self.prompt_ids[:, 1:].reshape(-1).to(torch.int32))
-        if self.warm_window:
-            warm_out(self.prompt_ids[:, prompt_length - self.warm_window:], self.warm_indices, self.table)
+        if prompt_length > 1 or self.warm_window:
+            seed_out(self.prompt_ids, self.warm_indices if self.warm_window else self.prompt_ids,
+                     self.table, self.warm_window)
 
     def fetch(self, slot, source, target):
         """Queue an async copy of a device tensor; the next step waits for it on the device."""
