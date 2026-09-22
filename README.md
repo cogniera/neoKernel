@@ -4,7 +4,7 @@ An automated research loop for Qwen3 inference. A model proposes a source change
 
 **Version 1** marks the project as it stood on September 22, 2026. The main documentation covers only the automated harness loop. Manually authored engine optimizations are outside that narrative.
 
-[Read the interactive documentation](docs/index.html) · [Version 1 notes](docs/V1.md) · [Experiment evidence](docs/v1-evidence.json)
+[Read the interactive documentation](docs/index.html) · [Version 1 notes](docs/v1.html) · [Experiment evidence](docs/v1-evidence.json)
 
 ## Open the documentation
 
@@ -29,7 +29,7 @@ A local keep needs every gate to pass, more than 1% aggregate throughput improve
 
 The Version 1 snapshot contains 27 automated entries: three baseline checks and 24 proposal attempts. These include failed and interrupted attempts. Baselines are measurements of the current engine, not improvements produced by the loop.
 
-Trial 37 was kept locally and later reverted after external evaluation. Trial 39 failed local replay and was later marked kept after external evaluation. Trial 44 regressed and was reverted. The [evidence notes](docs/V1.md#evidence) preserve those distinctions and the limits of the recorded sources.
+Trial 37 was kept locally and later reverted after external evaluation. Trial 39 failed local replay and was later marked kept after external evaluation. Trial 44 regressed and was reverted. The [evidence notes](docs/v1.html#evidence) preserve those distinctions and the limits of the recorded sources.
 
 The external evaluator is Dryft. Its hidden workload score is separate from the local harness's public and proxy workload measurements. See the [engine contract](QWEN_ENGINE_CONTRACT.md) for evaluation rules.
 

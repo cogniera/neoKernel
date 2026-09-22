@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Scope, evidence and provenance for neoKernel Version 1.">
+<meta name="theme-color" content="#08090b">
+<title>neoKernel · Version 1 evidence</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2308090b'/%3E%3Cpath d='M7 24V8h5l8 11V8h5v16h-5L12 13v11z' fill='%237dd87d'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Orbitron:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#scope">Skip to evidence</a>
+<header class="site-header">
+<a class="wordmark" href="index.html"><span class="brand-icon" aria-hidden="true">n</span> neoKernel</a>
+<nav aria-label="Evidence navigation"><a href="#scope">Scope</a><a href="#evidence">Evidence</a><a href="#sources">Sources</a></nav>
+<a class="author" href="index.html">Main article <span aria-hidden="true">←</span></a>
+</header>
+<main class="evidence-page">
+<header class="evidence-hero">
+<div class="eyebrow"><span class="status-dot"></span> VERSION 1 / SCOPE AND EVIDENCE</div>
+<h1>What counts<br><span>as Version 1.</span></h1>
+<p>This is the record behind the main article. It explains which experiments are included, where the numbers came from and what the evidence cannot prove.</p>
+<div class="evidence-meta"><span>27 <small>automated entries</small></span><span>24 <small>proposal attempts</small></span><span>3 <small>baseline checks</small></span></div>
+</header>
+<div class="article-layout evidence-layout">
+<aside class="contents"><span class="eyebrow">ON THIS PAGE</span><nav aria-label="Page sections"><a href="#scope">Scope</a><a href="#early-runs">Early runs</a><a href="#evidence">Evidence</a><a href="#range">Recorded range</a><a href="#loop">Loop rules</a><a href="#sources">Sources</a></nav><div class="version-note">v1<br><span>September 2026</span></div></aside>
+<article>
+<section id="scope" class="prose">
+<div class="eyebrow">SCOPE</div><h2>The automated loop only.</h2>
+<p>Version 1 marks the project as it stood on September 22, 2026. This record covers proposal context, source guards, repairs, correctness replay, paired measurements, keep rules and recovery.</p>
+<p>The evidence includes records attributed to the automated agent through experiment 45. That gives 27 entries: three baseline checks and 24 proposal attempts. Rejected proposals and interrupted attempts count as attempts, not completed GPU experiments.</p>
+<p>Manually authored decode and prefill work is outside this story. No new GPU evaluation was run to create this documentation.</p>
+</section>
+<section id="early-runs" class="prose">
+<div class="eyebrow">EARLY HARNESS TESTS</div><h2>Why many runs have no score.</h2>
+<p>A large part of the early record came from testing the harness itself. At that point, the proposer had one chance. The two extra repair attempts had not been added yet.</p>
+<p>If a candidate failed while applying its source, passed invalid syntax, crashed a check or stopped before benchmarking, there was no aggregate throughput to report. Those empty values describe where the run ended. They are not estimated from another experiment.</p>
+</section>
+<section id="evidence" class="prose">
+<div class="eyebrow">EVIDENCE</div><h2>A small record with clear limits.</h2>
+<p>The checked-in evidence export retains experiment IDs, timestamps, source revisions, recorded keep flags, available throughput, workload names and the original outcome notes. It leaves out prompts, source patches and trials outside the automated loop.</p>
+<div class="table-wrap"><table><caption>Selected records that explain the harness</caption><thead><tr><th>Trial</th><th>Recorded outcome</th><th>What it shows</th></tr></thead><tbody>
+<tr><td>4, 6</td><td>Baseline measured</td><td>Current engine measurements</td></tr>
+<tr><td>5</td><td>Malformed patch</td><td>Why the loop moved to complete files</td></tr>
+<tr><td>8</td><td>Source rejected</td><td>Syntax stopped before GPU execution</td></tr>
+<tr><td>12</td><td>Baseline failed</td><td>No eligible aggregate score</td></tr>
+<tr><td>29, 35</td><td>Measured, not kept</td><td>A score alone was not enough</td></tr>
+<tr><td>38</td><td>Repairs exhausted</td><td>The candidate was not accepted</td></tr>
+<tr><td>39</td><td>External keep only</td><td>Local replay still failed</td></tr>
+<tr><td>44</td><td>Regression</td><td>The candidate was reverted</td></tr>
+</tbody></table></div>
+<div class="source-links"><a href="v1-evidence.json">Download the evidence JSON <span>↓</span></a><a href="index.html#evidence">Open the interactive experiment browser <span>↗</span></a></div>
+</section>
+<section id="range" class="prose">
+<div class="eyebrow">RECORDED RANGE</div><h2>697 to 796 tok/s.</h2>
+<p>The lower endpoint is the highest recorded challenge result, 697.2 tok/s from trial 39. The upper endpoint is the highest local geomean, 795.95 tok/s from trial 37.</p>
+<div class="scope-note"><span>Read this as a rough range</span><p>The endpoints come from different candidates and different workload sets. It is not an expected performance interval. Trial 37 was reverted, and trial 39 failed local replay.</p></div>
+<p>When both measurements exist for one trial, the main article shows both as a rough observed range. When only one exists, it keeps its source label.</p>
+</section>
+<section id="loop" class="prose">
+<div class="eyebrow">CURRENT LOOP</div><h2>What happens to a proposal.</h2>
+<ol class="evidence-steps"><li>Measure the current engine.</li><li>Ask for a bounded source change.</li><li>Run source checks and unit tests.</li><li>Give a failed test back to the model for up to two repairs.</li><li>Check public correctness before the H100 benchmark.</li><li>Keep only a valid improvement with no large workload regression.</li><li>Save the result and restore or merge the candidate.</li></ol>
+<p>The current implementation is authoritative when an older note describes an earlier stage of the harness.</p>
+</section>
+<section id="sources" class="prose">
+<div class="eyebrow">SOURCES</div><h2>Inspect the record.</h2>
+<div class="source-links"><a href="v1-evidence.json">Curated experiment data <span>↓</span></a><a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel/loop.py">Proposal loop <span>↗</span></a><a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel/judge.py">Local judge <span>↗</span></a><a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel/transaction.py">Experiment recovery <span>↗</span></a><a href="index.html#future">Version 2 plans <span>↗</span></a></div>
+<p class="source-line">The raw Markdown note remains in the repository for maintainers. Website visitors are sent to this page.</p>
+</section>
+</article>
+</div>
+</main>
+<footer><a class="wordmark" href="index.html">neoKernel <span>v1</span></a><span>Scope and evidence</span><a href="index.html">Main article →</a></footer>
+</body>
+</html>

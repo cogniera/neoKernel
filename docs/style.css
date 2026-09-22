@@ -254,6 +254,8 @@ footer .wordmark{font-size:14px}
 .peak-summary p{font-size:12px;line-height:1.8;margin-top:10px;color:var(--muted)}
 .trial-metrics{flex-wrap:wrap;row-gap:20px}
 .trial-detail .metric-source{font-size:11px;color:var(--muted)}
+.evidence-page{max-width:1120px}.evidence-hero{max-width:850px;padding:110px 0 80px}.evidence-hero .eyebrow{display:flex;align-items:center;gap:12px}.evidence-hero h1{font:500 clamp(45px,7vw,76px)/1.08 'Orbitron',sans-serif;letter-spacing:-.065em;margin:24px 0}.evidence-hero h1 span{color:var(--green)}.evidence-hero>p{max-width:670px;font-size:19px;line-height:1.8}.evidence-meta{display:flex;gap:60px;margin-top:45px;padding-top:25px;border-top:1px solid var(--line)}.evidence-meta span{font:28px var(--mono);color:var(--ink)}.evidence-meta small{display:block;margin-top:7px;font:11px var(--body);color:var(--muted)}.evidence-layout{margin-top:10px}.evidence-steps{padding-left:22px;color:#b8bec8}.evidence-steps li{padding:7px 0 7px 8px;font-size:16px}.evidence-page td:nth-child(2){white-space:nowrap}
+@media(max-width:760px){.evidence-page{padding:0 22px}.evidence-hero{padding:75px 0 55px}.evidence-hero h1{font-size:42px}.evidence-hero>p{font-size:16px}.evidence-meta{gap:24px;justify-content:space-between}.evidence-meta span{font-size:22px}.evidence-meta small{font-size:9px}.evidence-page td:nth-child(2){white-space:normal}}
 
 .prose .roadmap-link{font-size:13px;color:var(--muted);margin-top:20px;padding-left:16px;border-left:2px solid var(--line)}
 #future h3{scroll-margin-top:35px}
