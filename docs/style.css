@@ -23,7 +23,7 @@ pre{overflow-x:auto;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere}
 .skip{position:fixed;top:-70px;left:20px;background:var(--green);color:var(--bg);padding:10px;z-index:99}
 .skip:focus{top:10px}
 .site-header{height:78px;max-width:1240px;padding:0 44px;margin:auto;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1b2025;font-size:13px}
-.wordmark{font-weight:600;display:flex;align-items:center;gap:10px;font-size:16px;letter-spacing:-.04em}
+.wordmark{font-weight:600;display:flex;align-items:center;gap:10px;font-size:16px;letter-spacing:.01em}
 .brand-icon{font:21px 'Orbitron',sans-serif;color:var(--green)}
 .site-header nav{display:flex;gap:32px;color:var(--muted)}
 .author{color:#acb4bf;font-size:12px}
@@ -34,7 +34,7 @@ main{max-width:1240px;margin:auto;padding:0 44px}
 .hero .eyebrow{display:flex;align-items:center;gap:12px;font-size:10px;letter-spacing:.1em}
 .status-dot{width:6px;height:6px;background:var(--green);border-radius:50%;box-shadow:0 0 12px #7dd87d55}
 .slash{color:#49545d;padding:0 6px}
-h1{font:500 clamp(40px,5.4vw,68px) 'Orbitron',sans-serif;letter-spacing:-.065em;margin:21px 0 28px;line-height:1.2}
+h1{font:500 clamp(40px,5.4vw,68px) 'Orbitron',sans-serif;letter-spacing:.02em;margin:21px 0 28px;line-height:1.2}
 .hero-line{font-size:clamp(24px,3vw,37px);line-height:1.25;letter-spacing:-.035em;color:var(--ink)}
 .hero-line span{color:var(--green)}
 .hero-summary{font-size:16px;line-height:1.7;margin-top:24px!important;color:var(--muted)}
