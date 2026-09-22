@@ -1,5 +1,18 @@
 # Working in this repository
 
+## Commit style
+
+Use the user's configured Git identity. Do not add assistant authorship or
+coauthor trailers. Keep commit subjects under 50 characters. Do not use em
+dashes in commit messages or new documentation prose.
+
+## Documentation scope
+
+The current project milestone is Version 1. The main documentation tells the
+automated harness loop story only. Do not credit manually authored engine
+optimizations to the loop. Keep the external evaluator out of titles and
+opening copy, and mention it only where evaluation provenance requires it.
+
 Read the engine contract once, in full, before your first edit — the **Docs**
 page at https://htn.dryft.ai/docs, or the included
 `QWEN_ENGINE_CONTRACT.md`.

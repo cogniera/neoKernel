@@ -1,0 +1,492 @@
+{
+  "version": "1",
+  "as_of": "2026-09-22",
+  "project_commit": "aa662a35a155c333b7c8965061d38574db68cfaf",
+  "source": "neokernel/results/log.jsonl",
+  "source_sha256": "847db2c85cd87e8f49b10cb4f0c42c55713756404af7a2facb83511f8ec704fb",
+  "selection": "proposer == agent and id <= 45; includes baseline checks; excludes manually authored engine work",
+  "provenance": "Curated local log snapshot. Later external decisions are retained as notes, not automatic local keeps. External run IDs for 37, 39 and 44 were not recorded.",
+  "recorded_peaks": {
+    "challenge": {
+      "trial_id": 39,
+      "tps": 697.2
+    },
+    "local": {
+      "trial_id": 37,
+      "tps": 795.9505208494154
+    },
+    "interpretation": "Rough range across recorded maxima from different trials and workload sets. Not an expected performance interval or a correctness claim."
+  },
+  "entries": [
+    {
+      "id": 4,
+      "proposer": "agent",
+      "item": "baseline",
+      "timestamp": "2026-09-19T18:41:17.530718+00:00",
+      "source_sha": "1d22f6205efb6226f29d25725d9789ed7393d0a8",
+      "outcome": "Baseline recorded",
+      "explanation": "The loop measured the current engine before proposing changes. This is a baseline check, not an optimization produced by the loop.",
+      "recorded_kept": true,
+      "local_geomean_tps": 216.31766329159595,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2",
+        "h-a",
+        "h-b",
+        "h-c"
+      ],
+      "source_note": "measured current tree before proposals"
+    },
+    {
+      "id": 5,
+      "proposer": "agent",
+      "item": "static_kv_cache",
+      "timestamp": "2026-09-19T18:42:05.030334+00:00",
+      "source_sha": "1d22f6205efb6226f29d25725d9789ed7393d0a8",
+      "outcome": "Patch rejected",
+      "explanation": "The model supplied a malformed diff. Applying it failed at line 29. This prompted the move to complete file replacements.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "patch_failed: error: corrupt patch at line 29"
+    },
+    {
+      "id": 6,
+      "proposer": "agent",
+      "item": "baseline",
+      "timestamp": "2026-09-19T18:51:23.433897+00:00",
+      "source_sha": "1d22f6205efb6226f29d25725d9789ed7393d0a8",
+      "outcome": "Baseline recorded",
+      "explanation": "The loop measured the current engine before proposing changes. This is a baseline check, not an optimization produced by the loop.",
+      "recorded_kept": true,
+      "local_geomean_tps": 251.33603505280684,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2",
+        "h-a",
+        "h-b",
+        "h-c"
+      ],
+      "source_note": "measured current tree before proposals"
+    },
+    {
+      "id": 7,
+      "proposer": "agent",
+      "item": "static_kv_cache",
+      "timestamp": "2026-09-19T18:54:10.602794+00:00",
+      "source_sha": "1d22f6205efb6226f29d25725d9789ed7393d0a8",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 8,
+      "proposer": "agent",
+      "item": "static_kv_cache",
+      "timestamp": "2026-09-19T18:54:51.970794+00:00",
+      "source_sha": "1d22f6205efb6226f29d25725d9789ed7393d0a8",
+      "outcome": "Guard rejected",
+      "explanation": "The source had mismatched parentheses. The guard rejected it before GPU execution.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "engine.py:43: closing parenthesis ')' does not match opening parenthesis '['"
+    },
+    {
+      "id": 9,
+      "proposer": "agent",
+      "item": "static_kv_cache",
+      "timestamp": "2026-09-19T18:57:10.715358+00:00",
+      "source_sha": "1d22f6205efb6226f29d25725d9789ed7393d0a8",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 12,
+      "proposer": "agent",
+      "item": "baseline",
+      "timestamp": "2026-09-19T19:48:13.700739+00:00",
+      "source_sha": "1d22f6205efb6226f29d25725d9789ed7393d0a8",
+      "outcome": "Baseline failed",
+      "explanation": "The current engine failed the local latency gates during a baseline check. No aggregate score was accepted.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2",
+        "h-a",
+        "h-b",
+        "h-c"
+      ],
+      "source_note": "baseline failed gates"
+    },
+    {
+      "id": 26,
+      "proposer": "agent",
+      "item": "lm_head_argmax",
+      "timestamp": "2026-09-20T04:20:05.292596+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 27,
+      "proposer": "agent",
+      "item": "attention_impl_kv_layout",
+      "timestamp": "2026-09-20T04:25:30.303072+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Interrupted",
+      "explanation": "The trial was interrupted and recovered without a merge. No measured improvement is claimed.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "interrupted; recovered without merge"
+    },
+    {
+      "id": 28,
+      "proposer": "agent",
+      "item": "lm_head_argmax",
+      "timestamp": "2026-09-20T04:30:20.336772+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 29,
+      "proposer": "agent",
+      "item": "attention_impl_kv_layout",
+      "timestamp": "2026-09-20T04:35:26.161644+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Not kept",
+      "explanation": "Local throughput was recorded, but the gates or improvement threshold did not permit a keep.",
+      "recorded_kept": false,
+      "local_geomean_tps": 693.0832621655079,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2",
+        "h-a",
+        "h-b",
+        "h-c"
+      ],
+      "source_note": "gates failed or improvement did not exceed 1 percent"
+    },
+    {
+      "id": 30,
+      "proposer": "agent",
+      "item": "lm_head_argmax",
+      "timestamp": "2026-09-20T04:37:03.315998+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 31,
+      "proposer": "agent",
+      "item": "lm_head_argmax",
+      "timestamp": "2026-09-20T04:38:15.576223+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 32,
+      "proposer": "agent",
+      "item": "lm_head_argmax",
+      "timestamp": "2026-09-20T04:39:31.832370+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 33,
+      "proposer": "agent",
+      "item": "prefill_packed_weights",
+      "timestamp": "2026-09-20T04:40:31.792453+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 34,
+      "proposer": "agent",
+      "item": "prefill_packed_weights",
+      "timestamp": "2026-09-20T04:41:31.021649+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Candidate check failed",
+      "explanation": "The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2"
+      ],
+      "source_note": "correctness check failed"
+    },
+    {
+      "id": 35,
+      "proposer": "agent",
+      "item": "prefill_cuda_graph",
+      "timestamp": "2026-09-20T04:45:56.341426+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Not kept",
+      "explanation": "Local throughput was recorded, but the gates or improvement threshold did not permit a keep.",
+      "recorded_kept": false,
+      "local_geomean_tps": 733.4360679138606,
+      "challenge_tps": null,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2",
+        "h-a",
+        "h-b",
+        "h-c"
+      ],
+      "source_note": "gates failed or improvement did not exceed 1 percent"
+    },
+    {
+      "id": 36,
+      "proposer": "agent",
+      "item": "attention_impl_kv_layout",
+      "timestamp": "2026-09-20T04:56:49.892044+00:00",
+      "source_sha": "cd30f0c9bea2989e6e118b7f2f71af8de5b2ab2f",
+      "outcome": "Interrupted",
+      "explanation": "The trial was interrupted and recovered without a merge. No measured improvement is claimed.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "interrupted; recovered without merge"
+    },
+    {
+      "id": 37,
+      "proposer": "agent",
+      "item": "attention_impl_kv_layout",
+      "timestamp": "2026-09-20T05:36:55.991796+00:00",
+      "source_sha": "dcebb1680511eb69d3006411cd66e68c998cfc38",
+      "outcome": "Reverted after evaluation",
+      "explanation": "The local judge initially kept this proposal at a reported 8.9 percent improvement. A later external score fell from 670.7 to 643.0 tok/s, so it was reverted. The external run ID is missing from the log.",
+      "recorded_kept": false,
+      "local_geomean_tps": 795.9505208494154,
+      "challenge_tps": 643.0,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2",
+        "h-a",
+        "h-b",
+        "h-c"
+      ],
+      "source_note": "reverted by Dryft official run (id pending): 643.0 tok/s vs 670.7 base; local judge had kept it at +8.9%"
+    },
+    {
+      "id": 38,
+      "proposer": "agent",
+      "item": "prefill_packed_weights",
+      "timestamp": "2026-09-20T05:39:13.433299+00:00",
+      "source_sha": "dcebb1680511eb69d3006411cd66e68c998cfc38",
+      "outcome": "Repairs exhausted",
+      "explanation": "The candidate failed after two repair attempts. It did not become an accepted improvement.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "failed after 2 repairs"
+    },
+    {
+      "id": 39,
+      "proposer": "agent",
+      "item": "residual_fuse_norm",
+      "timestamp": "2026-09-20T06:28:30.583947+00:00",
+      "source_sha": "eb696472b3f28f23a81e296842dba0fb7bd91ccf",
+      "outcome": "External keep only",
+      "explanation": "Local replay failed with a 4.0 logit gap on public-2. The log was later marked kept after a reported external score of 697.2 tok/s against 670.7. This was not an automatic local keep. The external run ID is missing.",
+      "recorded_kept": true,
+      "local_geomean_tps": null,
+      "challenge_tps": 697.2,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2",
+        "h-a",
+        "h-b",
+        "h-c"
+      ],
+      "source_note": "kept by Dryft official run (id pending): 697.2 tok/s vs 670.7 base; trial commit 36cce5c, tag dryft-best-39; local replay failed public-2 by 4.0 logits"
+    },
+    {
+      "id": 40,
+      "proposer": "agent",
+      "item": "proposal_rejected",
+      "timestamp": "2026-09-20T06:41:04.052764+00:00",
+      "source_sha": "eb696472b3f28f23a81e296842dba0fb7bd91ccf",
+      "outcome": "Interrupted",
+      "explanation": "The trial was interrupted and recovered without a merge. No measured improvement is claimed.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "interrupted; recovered without merge"
+    },
+    {
+      "id": 41,
+      "proposer": "agent",
+      "item": "proposal_rejected",
+      "timestamp": "2026-09-20T07:18:30.750468+00:00",
+      "source_sha": "f5e3f178c0476882befe63d43139139d74066d7b",
+      "outcome": "Outside playbook",
+      "explanation": "The proposal did not name an allowed playbook item. The loop requested a valid alternative and did not keep a change.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "item is not in the selected playbook; propose a valid alternative."
+    },
+    {
+      "id": 42,
+      "proposer": "agent",
+      "item": "proposal_rejected",
+      "timestamp": "2026-09-20T07:20:45.883538+00:00",
+      "source_sha": "f5e3f178c0476882befe63d43139139d74066d7b",
+      "outcome": "Outside playbook",
+      "explanation": "The proposal did not name an allowed playbook item. The loop requested a valid alternative and did not keep a change.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "item is not in the selected playbook; propose a valid alternative."
+    },
+    {
+      "id": 43,
+      "proposer": "agent",
+      "item": "proposal_rejected",
+      "timestamp": "2026-09-20T07:22:17.640181+00:00",
+      "source_sha": "f5e3f178c0476882befe63d43139139d74066d7b",
+      "outcome": "Outside playbook",
+      "explanation": "The proposal did not name an allowed playbook item. The loop requested a valid alternative and did not keep a change.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "item is not in the selected playbook; propose a valid alternative."
+    },
+    {
+      "id": 44,
+      "proposer": "agent",
+      "item": "prefill_packed_weights",
+      "timestamp": "2026-09-20T07:37:28.935852+00:00",
+      "source_sha": "f7e576f1b774c31e539f20132e591d7d6b95153f",
+      "outcome": "Reverted after evaluation",
+      "explanation": "All six recorded local workloads passed, but local aggregate throughput fell by 0.14 percent. The reported external score also fell from 697.2 to 687.7 tok/s. The trial was reverted. The external run ID is missing.",
+      "recorded_kept": false,
+      "local_geomean_tps": 710.8603274599905,
+      "challenge_tps": 687.7,
+      "workloads": [
+        "public-0",
+        "public-1",
+        "public-2",
+        "h-a",
+        "h-b",
+        "h-c"
+      ],
+      "source_note": "reverted by Dryft official run (id pending): 687.7 tok/s vs 697.2 base (trial 39); local judge -0.14%; trial commit f9645ea reverted in 7e41727"
+    },
+    {
+      "id": 45,
+      "proposer": "agent",
+      "item": "proposal_rejected",
+      "timestamp": "2026-09-20T07:40:16.129425+00:00",
+      "source_sha": "f7e576f1b774c31e539f20132e591d7d6b95153f",
+      "outcome": "Interrupted",
+      "explanation": "The trial was interrupted and recovered without a merge. No measured improvement is claimed.",
+      "recorded_kept": false,
+      "local_geomean_tps": null,
+      "challenge_tps": null,
+      "workloads": [],
+      "source_note": "interrupted; recovered without merge"
+    }
+  ]
+}

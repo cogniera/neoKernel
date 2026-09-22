@@ -1,0 +1,69 @@
+"""Export the fixed V1 automated-loop record. No GPU or network calls."""
+import hashlib
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / 'neokernel/results/log.jsonl'
+NOTES = {
+    5: ('Patch rejected', 'The model supplied a malformed diff. Applying it failed at line 29. This prompted the move to complete file replacements.'),
+    8: ('Guard rejected', 'The source had mismatched parentheses. The guard rejected it before GPU execution.'),
+    12: ('Baseline failed', 'The current engine failed the local latency gates during a baseline check. No aggregate score was accepted.'),
+    29: ('Not kept', 'Local throughput was recorded, but the gates or improvement threshold did not permit a keep.'),
+    35: ('Not kept', 'Local throughput was recorded, but the gates or improvement threshold did not permit a keep.'),
+    37: ('Reverted after evaluation', 'The local judge initially kept this proposal at a reported 8.9 percent improvement. A later external score fell from 670.7 to 643.0 tok/s, so it was reverted. The external run ID is missing from the log.'),
+    38: ('Repairs exhausted', 'The candidate failed after two repair attempts. It did not become an accepted improvement.'),
+    39: ('External keep only', 'Local replay failed with a 4.0 logit gap on public-2. The log was later marked kept after a reported external score of 697.2 tok/s against 670.7. This was not an automatic local keep. The external run ID is missing.'),
+    44: ('Reverted after evaluation', 'All six recorded local workloads passed, but local aggregate throughput fell by 0.14 percent. The reported external score also fell from 697.2 to 687.7 tok/s. The trial was reverted. The external run ID is missing.'),
+}
+
+def build():
+    raw = SOURCE.read_bytes()
+    rows = [json.loads(line) for line in raw.decode('utf-8').splitlines() if line.strip()]
+    entries = []
+    for row in rows:
+        if row.get('proposer') != 'agent' or row['id'] > 45:
+            continue
+        ident = row['id']
+        if ident in NOTES:
+            outcome, explanation = NOTES[ident]
+        elif row['item'] == 'baseline':
+            outcome, explanation = 'Baseline recorded', 'The loop measured the current engine before proposing changes. This is a baseline check, not an optimization produced by the loop.'
+        elif 'interrupted' in row.get('note', ''):
+            outcome, explanation = 'Interrupted', 'The trial was interrupted and recovered without a merge. No measured improvement is claimed.'
+        elif row['item'] == 'proposal_rejected':
+            outcome, explanation = 'Outside playbook', 'The proposal did not name an allowed playbook item. The loop requested a valid alternative and did not keep a change.'
+        else:
+            outcome, explanation = 'Candidate check failed', 'The candidate failed the public check. No performance improvement was accepted. A candidate error does not establish a numerical mismatch.'
+        entries.append({
+            'id': ident, 'proposer': 'agent', 'item': row['item'],
+            'timestamp': row['ts'], 'source_sha': row.get('sha'),
+            'outcome': outcome, 'explanation': explanation,
+            'recorded_kept': row['kept'], 'local_geomean_tps': row.get('geomean_tps'),
+            'challenge_tps': row.get('dryft_tps'),
+            'workloads': [w['name'] for w in row.get('workloads', [])],
+            'source_note': row.get('note', ''),
+        })
+    assert len(entries) == 27 and sum(e['item'] == 'baseline' for e in entries) == 3
+    local_peak = max((e for e in entries if e['local_geomean_tps'] is not None), key=lambda e: e['local_geomean_tps'])
+    challenge_peak = max((e for e in entries if e['challenge_tps'] is not None), key=lambda e: e['challenge_tps'])
+    document = {
+        'version': '1', 'as_of': '2026-09-22',
+        'project_commit': 'aa662a35a155c333b7c8965061d38574db68cfaf',
+        'source': 'neokernel/results/log.jsonl', 'source_sha256': hashlib.sha256(raw).hexdigest(),
+        'selection': 'proposer == agent and id <= 45; includes baseline checks; excludes manually authored engine work',
+        'provenance': 'Curated local log snapshot. Later external decisions are retained as notes, not automatic local keeps. External run IDs for 37, 39 and 44 were not recorded.',
+        'recorded_peaks': {
+            'challenge': {'trial_id': challenge_peak['id'], 'tps': challenge_peak['challenge_tps']},
+            'local': {'trial_id': local_peak['id'], 'tps': local_peak['local_geomean_tps']},
+            'interpretation': 'Rough range across recorded maxima from different trials and workload sets. Not an expected performance interval or a correctness claim.',
+        },
+        'entries': entries,
+    }
+    serialized = json.dumps(document, indent=2, ensure_ascii=False) + '\n'
+    (ROOT / 'docs/v1-evidence.json').write_text(serialized, encoding='utf-8')
+    (ROOT / 'docs/v1-data.js').write_text('// Generated by build_v1_evidence.py.\nwindow.NEOKERNEL_V1 = ' + serialized.rstrip() + ';\n', encoding='utf-8')
+    print(f'Exported {len(entries)} automated entries, including 3 baseline checks.')
+
+if __name__ == '__main__':
+    build()

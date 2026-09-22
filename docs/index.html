@@ -1,469 +1,79 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="neoKernel: an autoresearch harness for the Qwen3 4B decode step, built solo at Hack the North 2026 for the Dryft kernel challenge. Using Modal compute and Inference provided by Baseten">
-<title>neoKernel</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=swap">
-<style>
-  :root{
-    --bg:#f6f7f8; --surface:#fcfcfb; --ink:#171a1d; --ink-2:#4b545d; --ink-3:#7c858e;
-    --rule:#dfe3e7; --rule-2:#eceff2;
-    --blue:#2a78d6; --blue-wash:rgba(42,120,214,.10);
-    --orange:#eb6834; --grey:#8a9099;
-    --good:#1f7a3f; --bad:#b3261e;
-    --code-bg:#eef1f3;
-    color-scheme:light;
-  }
-  @media (prefers-color-scheme: dark){
-    :root:not([data-theme="light"]){
-      --bg:#141618; --surface:#1a1d20; --ink:#f1f3f4; --ink-2:#b4bcc4; --ink-3:#7f8790;
-      --rule:#2c3136; --rule-2:#23282c;
-      --blue:#3987e5; --blue-wash:rgba(57,135,229,.14);
-      --orange:#d95926; --grey:#9aa1a9;
-      --good:#5fbf7f; --bad:#f08a84;
-      --code-bg:#22272b;
-      color-scheme:dark;
-    }
-  }
-  :root[data-theme="dark"]{
-    --bg:#141618; --surface:#1a1d20; --ink:#f1f3f4; --ink-2:#b4bcc4; --ink-3:#7f8790;
-    --rule:#2c3136; --rule-2:#23282c;
-    --blue:#3987e5; --blue-wash:rgba(57,135,229,.14);
-    --orange:#d95926; --grey:#9aa1a9;
-    --good:#5fbf7f; --bad:#f08a84;
-    --code-bg:#22272b;
-    color-scheme:dark;
-  }
-  *{box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Source Serif 4",Georgia,"Times New Roman",serif;font-size:18px;line-height:1.62;padding-inline:20px;padding-block:0 96px;-webkit-font-smoothing:antialiased}
-  @media (prefers-reduced-motion: reduce){ *{transition:none!important;animation:none!important} }
-  a{color:var(--blue);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--blue) 40%,transparent)}
-  a:hover{border-bottom-color:var(--blue)}
-  a:focus-visible,button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-  .col{max-width:680px;margin-inline:auto}
-  .wide{max-width:880px;margin-inline:auto}
-  h1,h2,h3{font-family:"Archivo","Helvetica Neue",Arial,sans-serif;letter-spacing:-.01em;text-wrap:balance;margin:0}
-  h1{font-size:clamp(40px,7vw,64px);font-weight:700;line-height:1.02;letter-spacing:-.025em}
-  h2{font-size:26px;font-weight:600;margin-top:72px;margin-bottom:14px;line-height:1.2}
-  h3{font-size:19px;font-weight:600;margin-top:36px;margin-bottom:8px}
-  p{margin:0 0 18px}
-  .mono,code,td.num,th.num,.tile .v,.eyebrow,.cap,.legend,.axis{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
-  code{font-size:.86em;background:var(--code-bg);padding:.1em .35em;border-radius:3px}
-  .eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
-  header{padding-block:56px 24px}
-  .meta{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:22px;font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--ink-2)}
-  .lede{font-size:22px;line-height:1.45;margin-top:22px;color:var(--ink);text-wrap:pretty}
-  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:34px}
-  .tile{background:var(--surface);padding:18px 18px 16px}
-  .tile .l{font-family:"Archivo",sans-serif;font-size:13px;color:var(--ink-2);margin-bottom:6px}
-  .tile .v{font-size:32px;font-weight:500;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-  .tile .u{font-size:13px;color:var(--ink-3);margin-left:4px;font-family:"Archivo",sans-serif}
-  .tile .s{font-family:"Archivo",sans-serif;font-size:12.5px;color:var(--ink-3);margin-top:8px}
-  @media (max-width:560px){ .tiles{grid-template-columns:1fr} .tile .v{font-size:28px} }
-  figure{margin:30px 0 34px}
-  figure .plot{background:var(--surface);border:1px solid var(--rule);padding:18px 18px 12px;overflow:hidden}
-  figcaption{font-family:"Archivo",sans-serif;font-size:14px;line-height:1.5;color:var(--ink-2);margin-top:10px;max-width:680px;margin-inline:auto}
-  figcaption b{color:var(--ink);font-weight:600}
-  .legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12px;color:var(--ink-2);margin-bottom:10px}
-  .legend span{display:inline-flex;align-items:center;gap:7px}
-  .sw{width:12px;height:12px;border-radius:2px;display:inline-block}
-  .sw.line{width:16px;height:0;border-top:2px solid var(--orange);border-radius:0}
-  svg text{font-family:"JetBrains Mono",monospace;font-size:12px;fill:var(--ink-2)}
-  svg .lab{fill:var(--ink)}
-  svg .grid{stroke:var(--rule-2);stroke-width:1}
-  svg .axis-line{stroke:var(--rule);stroke-width:1}
-  svg .floor{stroke:var(--orange);stroke-width:2}
-  svg .bar.native{fill:var(--grey)} svg .bar.cur{fill:var(--blue)} svg .bar.kern{fill:var(--blue)} svg .bar.gap{fill:var(--grey)}
-  svg .hit{fill:transparent;cursor:default}
-  .tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--bg);font-family:"JetBrains Mono",monospace;font-size:12px;line-height:1.45;padding:8px 10px;border-radius:4px;max-width:280px;opacity:0;transition:opacity .08s;z-index:10;white-space:pre-line}
-  .tip.on{opacity:1}
-  table{width:100%;border-collapse:collapse;font-family:"Archivo",sans-serif;font-size:14px;line-height:1.4}
-  th{text-align:left;font-weight:600;color:var(--ink-2);font-size:12px;letter-spacing:.04em;text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--rule)}
-  td{padding:9px 10px;border-bottom:1px solid var(--rule-2);vertical-align:top}
-  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
-  .tw{overflow-x:auto;background:var(--surface);border:1px solid var(--rule)}
-  .pill{display:inline-block;font-family:"JetBrains Mono",monospace;font-size:11px;padding:2px 7px;border-radius:3px;border:1px solid var(--rule);color:var(--ink-2);white-space:nowrap}
-  .pill.kept{color:var(--good);border-color:color-mix(in srgb,var(--good) 40%,transparent)}
-  .pill.rev{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}
-  .pill.na{color:var(--ink-3)}
-  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
-  .chip{font-family:"Archivo",sans-serif;font-size:13px;padding:6px 12px;border:1px solid var(--rule);background:var(--surface);color:var(--ink-2);border-radius:999px;cursor:pointer}
-  .chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
-  .note{border-left:2px solid var(--orange);padding:4px 0 4px 18px;margin:26px 0;color:var(--ink-2);font-size:17px}
-  .diagram{background:var(--surface);border:1px solid var(--rule);padding:18px;overflow-x:auto}
-  .diagram svg{display:block;min-width:720px;width:100%;height:auto}
-  .diagram rect.box{fill:var(--bg);stroke:var(--rule)}
-  .diagram rect.judge{fill:var(--blue-wash);stroke:var(--blue)}
-  .diagram text{font-family:"Archivo",sans-serif;font-size:13px;fill:var(--ink)}
-  .diagram text.sub{font-family:"JetBrains Mono",monospace;font-size:10px;fill:var(--ink-3)}
-  .diagram path,.diagram line{stroke:var(--ink-3);fill:none;stroke-width:1.4}
-  .diagram .arr{fill:var(--ink-3);stroke:none}
-  .math{background:var(--surface);border:1px solid var(--rule);padding:16px 18px;font-family:"JetBrains Mono",monospace;font-size:13.5px;line-height:1.7;overflow-x:auto;white-space:pre}
-  ol.src{padding-left:22px;font-size:16px}
-  ol.src li{margin-bottom:10px;color:var(--ink-2)}
-  footer{margin-top:80px;border-top:1px solid var(--rule);padding-top:20px;font-family:"Archivo",sans-serif;font-size:13px;color:var(--ink-3)}
-  .status{display:inline-flex;align-items:center;gap:8px;font-family:"Archivo",sans-serif;font-size:13px;color:var(--ink-2);border:1px solid var(--rule);padding:6px 12px;border-radius:999px;background:var(--surface)}
-  .status i{width:8px;height:8px;border-radius:50%;background:var(--orange);display:inline-block}
-</style>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="neoKernel Version 1. Building an automated research loop for Qwen3 inference, with proposals, independent checks and a record of every experiment.">
+<meta name="theme-color" content="#08090b"><title>neoKernel · Version 1</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2308090b'/%3E%3Cpath d='M7 24V8h5l8 11V8h5v16h-5L12 13v11z' fill='%237dd87d'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Orbitron:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css"><script src="v1-data.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
-
-<header class="col">
-  <div class="eyebrow">Hack the North 2026 · Dryft kernel challenge · Version 1 write-up</div>
-  <h1 style="margin-top:14px">neoKernel</h1>
-  <p class="lede">An autoresearch harness for the Qwen3 4B decode step: a judge that replicates the leaderboard on real hardware, a guard that makes the score hard to game, and agents that are allowed to change the engine only through both.</p>
-  <div class="meta">
-    <span>Paarth Sharma · solo</span>
-    <span>Sept 19, 2026</span>
-    <span id="status-slot"><span class="status"><i></i> v1 </span></span>
-  </div>
-  <div class="tiles" id="tiles"></div>
-</header>
-
-<main>
-<section class="col">
-  <h2>What the leaderboard measures</h2>
-  <p>Dryft hands every team the same model, <code>Qwen/Qwen3-4B-Instruct-2507</code> in BF16 on one H100, and one rule: make it produce tokens faster without changing what it says. A submission is an <code>engine.py</code> that owns the whole generation loop. It is scored as output tokens per second, including prefill, as a geometric mean over six hidden workloads, and it must pass five gates per workload: every emitted token must be native Qwen's greedy choice on the same prefix (or within 2.0 logits of it), time to first token and time per output token may not exceed 1.10 times native, peak memory stays under 90 percent, and timing spread across five samples stays under 25 percent.</p>
-  <p>The three public workloads are batch 1 with 512 prompt tokens and 32 outputs, batch 4 with 2,048 and 32, and batch 16 with 512 and 128. Prompts are 512 to 2,048 tokens against 32 to 128 outputs, so prefill is a real share of the clock, and the geometric mean means the batch-1 workload counts as much as the batch-16 one.</p>
+<a class="skip" href="#intro">Skip to article</a>
+<header class="site-header"><a class="wordmark" href="#top"><span class="brand-icon" aria-hidden="true">n</span> neoKernel</a><nav aria-label="Main navigation"><a href="#loop">The loop</a><a href="#evidence">Experiments</a><a href="#run">Run it</a></nav><a class="author" href="https://paarths.dev/">Paarth Sharma <span aria-hidden="true">↗</span></a></header>
+<main id="top">
+<section class="hero" aria-labelledby="hero-title">
+<div class="hero-copy"><div class="eyebrow"><span class="status-dot"></span> VERSION 1 <span class="slash">/</span> RESEARCH NOTES</div><h1 id="hero-title">neoKernel</h1><p class="hero-line">A research loop for<br><span>faster inference.</span></p><p class="hero-summary">Building a loop that writes inference code,<br class="desktop-break"> tests its own ideas and keeps a record.</p><a class="text-link" href="#intro">Inside the project <span aria-hidden="true">↓</span></a></div>
+<figure class="machine-figure"><div class="scene" id="scene" tabindex="0" role="img" aria-label="Interactive 3D model of the research loop. Drag or use arrow keys to rotate. Use the controls below to separate the layers."><div class="scene-grid" aria-hidden="true"></div><div class="machine" id="machine" aria-hidden="true">
+<div class="board board-base"><div class="board-label">neoKernel / v1</div><div class="trace trace-a"></div><div class="trace trace-b"></div><div class="socket"><div class="chip">nK<span>RESEARCH LOOP</span></div></div><div class="bank bank-a"></div><div class="bank bank-b"></div><div class="pins"></div></div>
+<div class="board board-engine"><span class="board-label">CANDIDATE</span><div class="cell-grid"></div><div class="trace trace-a"></div></div>
+<div class="board board-judge"><span class="board-label">INDEPENDENT JUDGE</span><div class="check-grid"></div><div class="trace trace-b"></div></div>
+<div class="board board-proposal"><span class="board-label">PROPOSAL</span><div class="code-lines"><i></i><i></i><i></i><i></i><i></i></div><span class="board-corner">{ }</span></div></div><span class="scene-coordinate">MODEL 01 / LOOP</span><span class="drag-hint">DRAG TO ROTATE</span></div>
+<div class="scene-controls"><label for="separation">Separate layers</label><input id="separation" type="range" min="0" max="100" value="58"><button id="reset-view" type="button" aria-label="Reset 3D view">Reset ↺</button></div><figcaption>A model of the software loop. Each layer has a separate job.</figcaption></figure>
 </section>
-
-<section class="col">
-  <h2>The floor</h2>
-  <p>A decode step reads every weight once. The model is 8,044,936,192 bytes of BF16 weights (tied embedding counted once), and an H100 SXM moves about 3.35 TB/s, so no step can take less than about 2.40 ms, whatever the batch size, until something like exact speculative decoding produces more than one token per weight pass. Prefill has a compute floor of its own. Put together, each workload has a ceiling in tokens per second, and everything on this page is measured against it.</p>
-  <div class="math" id="floor-math"></div>
-  <p style="margin-top:18px">The starter engine, native Transformers with a dynamic cache, sits at 14 to 22 percent of that ceiling on the public shapes. The first kept change moves it to 16 to 25 percent. The distance left is the project.</p>
+<div class="project-strip"><span>Qwen3 4B <small>target model</small></span><span>Python + Triton <small>engine source</small></span><span>GLM <small>proposal model</small></span><span>Modal <small>GPU execution</small></span></div>
+<div class="article-layout"><aside class="contents"><span class="eyebrow">ON THIS PAGE</span><nav aria-label="Article sections"><a href="#intro">The question</a><a href="#loop">The research loop</a><a href="#judge">Anti Reward Hacking</a><a href="#evidence">What happened</a><a href="#evaluation">Evaluation</a><a href="#run">Run it yourself</a><a href="#future">Future work</a><a href="#notes">Sources</a></nav><div class="version-note">v1<br><span>September 2026</span></div></aside>
+<article>
+<section id="intro" class="prose"><div class="eyebrow">THE QUESTION</div><h2>Can the experiment run itself?</h2><p>Making inference faster means trying changes that might not work. A kernel can be quick and still return the wrong answer. A faster decode step can also hide a slower first token.</p><p>neoKernel puts that work inside a research loop. A model proposes a change to a Qwen3 inference engine. The harness checks the source, runs the candidate and compares it with a reference. It then keeps the change or restores the previous engine.</p><p>The useful output is a record of what happened. That includes broken proposals, failed checks and experiments that looked promising until they were measured elsewhere.</p><div class="scope-note"><span>About this version</span><p>Version 1 marks the project as it stood on September 22, 2026. This article covers the automated harness loop. The experiment browser includes only entries attributed to that loop.</p></div></section>
+<section id="loop"><div class="prose"><div class="eyebrow">THE RESEARCH LOOP</div><h2>One idea at a time.</h2><p>The proposer sees the current source, a profile and recent experiment history. It returns a bounded change. The harness owns the checks and the decision.</p><p class="roadmap-link">For Version 2, I plan to run multiple agent swarms in parallel and let them share findings. <a href="#future-swarms">Check the Future work section for more details.</a></p></div>
+<div class="loop-lab interactive"><div class="lab-header"><span>FOLLOW ONE EXPERIMENT</span><button id="play-loop" type="button" aria-pressed="false">Play cycle ▷</button></div><div class="loop-stages" role="group" aria-label="Research loop stages"><button data-stage="0" aria-pressed="true"><span>01</span>Propose</button><span class="connector" aria-hidden="true">→</span><button data-stage="1" aria-pressed="false"><span>02</span>Guard</button><span class="connector" aria-hidden="true">→</span><button data-stage="2" aria-pressed="false"><span>03</span>Test</button><span class="connector" aria-hidden="true">→</span><button data-stage="3" aria-pressed="false"><span>04</span>Measure</button><span class="connector" aria-hidden="true">→</span><button data-stage="4" aria-pressed="false"><span>05</span>Decide</button></div>
+<div class="stage-detail" aria-live="polite"><div><span class="step-tag" id="stage-tag">01 / PROPOSE</span><h3 id="stage-title">Give the model a small job.</h3><p id="stage-description">The model receives the current engine, profile, recent log and allowed playbook. It returns complete source files with a hypothesis and expected effect.</p></div><pre id="stage-code">proposal
+  item
+  hypothesis
+  expected_effect
+  files
+  risk
+  reasoning</pre></div><div class="loop-return"><span aria-hidden="true">↳</span> The result becomes context for the next proposal.</div></div>
+<div class="prose"><h3>From proposals to working code</h3><p>One of the first proposals failed before it could even run. The model had returned a malformed diff, so there was no way to test the change it intended. I switched to asking for complete files and left Git to generate the diff for the record. Proposals could still only touch the engine entry point and its Python kernels.</p><p>The early loop gave each proposal one attempt. Later, I added a chance to learn from a failed test: after the source check, the candidate runs unit tests on an L4, and the model gets the error output with up to two chances to fix its code. A candidate then has to pass public correctness checks before it reaches the H100 benchmark.</p><h3>Picking up after a failed run</h3><p>A failed experiment should leave something useful behind. Each trial has its own branch, saved copies of the source and a journal of its progress, so a rejected candidate can be inspected even after the previous engine has been restored. Accepted changes are committed and merged locally, with pushing left outside the loop. The harness also reserves the estimated budget before starting remote work.</p><p class="source-line">Implementation <a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel/loop.py">loop.py</a> and <a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel/transaction.py">transaction.py</a></p></div></section>
+<section id="judge"><div class="prose"><div class="eyebrow">ANTI REWARD HACKING</div><h2>Anti Reward Hacking</h2><p>The candidate does not grade itself. Its score comes from checks and measurements owned by the harness.</p><p>The parent process supplies prompts and times the arriving tokens. It stops the candidate before an independent native model replays the generated sequence. Every output token is checked against the model's logits on the prefix the candidate actually produced.</p><p>A token passes if it is the native argmax or is within 2.0 logits of it. The small margin allows for differences in BF16 arithmetic. One position outside that margin fails the workload.</p></div>
+<div class="judge-lab interactive"><div class="lab-header"><span>ONE TOKEN UNDER REPLAY</span><span class="muted">Illustrative values</span></div><div class="logit-row"><span>Native argmax</span><div class="logit-track"><div class="logit-fill native"></div></div><output>10.0</output></div><div class="logit-row"><span>Emitted token</span><div class="logit-track"><div class="logit-fill candidate" id="candidate-bar"></div><span class="threshold" title="2.0 logit margin"></span></div><output id="candidate-logit">8.5</output></div><div class="judge-controls"><label for="logit-gap">Gap from argmax <output id="gap-value">1.5</output></label><input type="range" id="logit-gap" min="0" max="4" step="0.1" value="1.5"><div id="verdict" class="verdict" role="status">Pass <span>1.5 ≤ 2.0</span></div></div><p class="lab-caption">Move the slider to test the rule. This is a teaching example, not a measured token.</p></div>
+<div class="prose"><p>The local runner isolates the candidate process and controls its inputs. It is not a hardened sandbox. Parent and child share an operating system identity, and peak allocator memory is reported by the child.</p></div></section>
+<section id="evidence"><div class="prose"><div class="eyebrow">WHAT HAPPENED</div><h2>The log is part of the result.</h2><p>The saved record contains 27 entries attributed to the automated loop. Three are baseline checks. The remaining 24 record proposal attempts, including rejected and interrupted ones.</p><p>Those baselines were taken against changing engine states. They are not a speedup curve. The manually built engine improvements are outside this article.</p></div><div class="evidence-summary"><div><strong>27</strong><span>automated entries</span></div><div><strong>24</strong><span>proposal attempts</span></div><div><strong>3</strong><span>baseline checks</span></div></div>
+<div class="peak-summary"><div class="eyebrow">ROUGH RANGE ACROSS RECORDED PEAKS</div><strong id="peak-range">697 to 796 tok/s</strong><p id="peak-sources">Challenge peak 697.2 (trial 39). Local peak 795.95 (trial 37).</p><p>Different trials and workload sets. This is a rough comparison, not an expected performance interval. Trial 37 was reverted. Trial 39 failed local replay.</p></div>
+<div class="scope-note"><span>Early harness testing</span><p>Many early runs were tests of the harness itself. The proposer had one shot, before the two extra repair attempts were added. Runs that failed before scoring had no aggregate result. The browser shows throughput results and baseline checks. The full record remains in the evidence download.</p></div>
+<div class="experiment-lab interactive"><div class="lab-header"><label for="trial-filter">EXPERIMENT RECORD</label><select id="trial-filter"><option value="measured">With throughput results</option><option value="baseline">Baseline checks</option></select></div><div id="trial-list" class="trial-list" role="group" aria-label="Select an experiment"></div><div class="trial-detail" id="trial-detail" aria-live="polite"></div><div class="record-footer"><span id="record-count">7 entries</span><a href="v1-evidence.json">Download evidence JSON ↓</a></div></div><noscript><p>The interactive log needs JavaScript. <a href="V1.md">Read the Version 1 notes</a> or <a href="v1-evidence.json">download the evidence</a>.</p></noscript>
+<div class="prose"><h3>A kept flag needs context.</h3><p>Trial 39 proposed fusing a residual addition with normalization. Local replay failed with a 4.0 logit gap. The record was later marked kept after a reported external score of 697.2. That was an external decision. It was not a passing automatic local keep.</p><p>Trial 44 passed the recorded local workload checks, but its local aggregate fell by 0.14 percent. Its reported external score also fell, from 697.2 to 687.7. It was reverted.</p><p class="source-line">These external figures come from notes in the saved log. Run IDs were not recorded there. <a href="V1.md#evidence">Read the provenance</a>.</p></div></section>
+<section id="evaluation" class="prose"><div class="eyebrow">EVALUATION</div><h2>Measure the whole generation.</h2><p>Throughput includes the prompt and every output token. The harness also records time to first token, time per output token, memory and sample spread. A good average cannot excuse a failed correctness check.</p><div class="rules"><div><span>Correctness</span><strong>≤ 2.0 logit gap</strong></div><div><span>Local latency</span><strong>≤ 1.05× native</strong></div><div><span>Keep threshold</span><strong>&gt; 1% improvement</strong></div><div><span>Per workload regression</span><strong>≤ 3%</strong></div></div><p>The external evaluator is Dryft. Its official score uses three hidden workloads. The local harness uses three public shapes and three proxy shapes. Those proxies are guesses, not the hidden test set. The official latency limit is 1.10× native, while the local limit is 1.05×.</p><div class="table-wrap"><table><caption>Public workload shapes</caption><thead><tr><th>Workload</th><th>Batch</th><th>Prompt</th><th>Output</th></tr></thead><tbody><tr><td>public-0</td><td>1</td><td>512</td><td>32</td></tr><tr><td>public-1</td><td>4</td><td>2048</td><td>32</td></tr><tr><td>public-2</td><td>16</td><td>512</td><td>128</td></tr></tbody></table></div><p class="source-line">Rules from the repository's <a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/QWEN_ENGINE_CONTRACT.md">engine contract</a> and <a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel/judge.py">local judge</a>.</p></section>
+<section id="run" class="prose"><div class="eyebrow">RUN IT YOURSELF</div><h2>Start with the source checks.</h2><p>The project uses Python 3.11. Run these from the repository root. They do not start a GPU job.</p><div class="code-block"><div class="code-header"><span>LOCAL</span><button class="copy-button" data-copy="offline" type="button">Copy</button></div><pre id="offline">py -3.11 -m neokernel guard
+py -3.11 -m neokernel report</pre></div><p>The automated loop needs the dependencies in <code>neokernel/requirements.txt</code>, a configured Modal account, the pinned checkpoint in its volume and <code>BASETEN_API_KEY</code> in the environment. It starts from a clean <code>main</code> branch.</p><p class="roadmap-link">Version 1 uses GLM through Baseten for proposals and Modal for GPU jobs. In Version 2, I am working toward an API provider agnostic and GPU provider agnostic harness. <a href="#future">Check the Future work section for more details.</a></p><div class="code-block"><div class="code-header"><span>ONE AUTOMATED ATTEMPT</span><button class="copy-button" data-copy="auto-command" type="button">Copy</button></div><pre id="auto-command">py -3.11 -m neokernel auto --steps 1 --workloads all --max-gpu-minutes 5</pre></div><p class="small-note">This command uses paid GPU compute and model inference. The five minute value bounds the loop's GPU budget. Persistent reservations can stop a run earlier.</p><p>Use <code>--resume</code> after an interrupted loop. Recovery preserves the candidate snapshot before restoring rejected work. The optional <code>sweep</code> command searches numeric settings without a model. Its existence is not evidence of a measured win.</p><p class="source-line"><a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel/README.md">Full setup and recovery notes ↗</a></p></section>
+<section id="future" class="prose">
+<div class="eyebrow">FUTURE WORK / VERSION 2</div><h2>A reusable research system.</h2>
+<p>I want neoKernel to become a Python package for running inference experiments with a model and compute provider of your choice. Version 2 will start with parallel search and provider independence. The plans below are future work, not features available in Version 1.</p>
+<h3 id="future-swarms">Multiple agent swarms</h3>
+<p>I plan to run several swarms in parallel. Each swarm would explore a different hypothesis, with agents handling proposals, implementation and profiling. They would share measured findings and failed attempts so one group can build on another's work.</p>
+<p>Each candidate would have its own workspace and budget. A shared scheduler would reserve GPUs for timing runs so competing jobs do not distort the measurements. The independent judge would still decide which candidates pass. Combining changes would require a fresh evaluation.</p>
+<h3 id="future-api">API provider independence</h3>
+<p>The proposal loop should work through a small model adapter rather than depend on one inference API. The adapter would handle credentials, structured responses, retries and usage reporting. The experiment format and keep rules would stay the same when the provider changes.</p>
+<h3 id="future-gpu">GPU provider independence</h3>
+<p>The compute layer should support different cloud providers and local GPUs through a common job interface. A job would carry its engine source, environment requirements and workload definition. Each backend would return the same result format.</p>
+<p>Changing providers should not mean comparing unlike machines as if they were identical. Results would retain GPU type, runtime versions and the paired native baseline. Supporting another GPU architecture would still require compatible kernels and fresh correctness checks.</p>
+<h3 id="future-package">A Python package</h3>
+<p>The longer term goal is an installable package with a Python API and a small command line interface. Users would supply an engine, reference implementation, workloads and a budget. Provider adapters would handle execution. The package would keep the experiment history and export a reproducible report.</p>
+<p>I want saved experiments to include source hashes, environment details and replayable checks. That would make it easier to reproduce a result, compare search strategies and build on another person's work.</p>
+<h3 id="future-research">Research directions</h3>
+<p><strong>Parallel search and shared memory.</strong> KernelAgent explores optimization paths in parallel and carries findings between rounds. I want to study whether swarms find better candidates within a fixed budget than the single proposal loop. <a href="https://pytorch.org/blog/kernelagent-hardware-guided-gpu-kernel-optimization-via-multi-agent-orchestration/">KernelAgent</a>.</p>
+<p><strong>Compiler autotuning.</strong> Ansor combines program search with a learned cost model. A useful direction for neoKernel is to pair structural proposals with numeric tuning, then prioritize candidates using measured hardware feedback. <a href="https://www.usenix.org/conference/osdi20/presentation/zheng">Ansor</a>.</p>
+<p><strong>Evaluation beyond one model.</strong> KernelBench evaluates generated kernels for correctness and speed. I want a broader set of operators, model shapes and held-out workloads, while retaining whole-generation replay. This would help test whether improvements generalize beyond the cases used during search. <a href="https://arxiv.org/abs/2502.10517">KernelBench</a>.</p>
+<p><strong>Stronger Anti Reward Hacking.</strong> I want tighter process isolation, protected evaluation inputs and checks that a candidate cannot modify. Failed attempts should remain visible. Search quality should be measured by reproducible, valid improvements under a fixed budget.</p>
 </section>
-
-<section class="wide">
-  <figure>
-    <div class="plot">
-      <div class="legend"><span><span class="sw" style="background:var(--grey)"></span>native starter (official run 4877cddd)</span><span><span class="sw" style="background:var(--blue)"></span>engine #11, static cache + CUDA graph (official run 69b39b11)</span><span><span class="sw line"></span>bandwidth floor</span></div>
-      <div id="chart-floor"></div>
-    </div>
-    <figcaption><b>Fraction of the physical ceiling, per public workload.</b> Both bars are Dryft's own official measurements, so they are directly comparable. The floor for each shape is prefill compute floor plus (N minus 1) weight-bound decode steps. Hover for the numbers.</figcaption>
-  </figure>
-</section>
-
-<section class="col">
-  <h2>Where the time goes</h2>
-  <p>Native decode costs 17 to 22 ms per step and is nearly flat from batch 1 to batch 16. Against a 2.4 ms weight floor that says the step is overhead-bound, not bandwidth-bound: the GPU is waiting on Python and on thousands of small launches, not on memory. Decode is 96, 76 and 94 percent of total time on the three public shapes. Prefill, by contrast, is already within about two times of its compute floor.</p>
-  <p>The first change was the obvious one: preallocate the KV cache at exactly prompt plus output length (shapes are fixed within a workload, and each workload gets a warmup of its own shape), bypass the Transformers wrapper, and capture the decode step as one CUDA graph. That removed the Python. It did not remove the launches. The profile of the kept engine on an H100 shows one graph launch per step and 2,292 kernels inside it, about sixty-four per layer: Transformers' general-purpose layer code builds masks, expands the eight KV heads to thirty-two with copies, and casts and reshapes on every step. Inside a graph each of those slivers still costs microseconds of scheduling and its own tail.</p>
-</section>
-
-<section class="wide">
-  <figure>
-    <div class="plot">
-      <div class="legend"><span><span class="sw" style="background:var(--grey)"></span>native</span><span><span class="sw" style="background:var(--blue)"></span>engine #11</span><span><span class="sw line"></span>weight floor 2.40 ms</span></div>
-      <div id="chart-tpot"></div>
-    </div>
-    <figcaption><b>Time per output token on Dryft, ms.</b> Graph capture roughly halves the batch-1 step and barely touches batch 16, which is the signature of a step made of too many small kernels rather than too much Python. Hover for values and ratios.</figcaption>
-  </figure>
-  <figure>
-    <div class="plot">
-      <div class="legend"><span><span class="sw" style="background:var(--blue)"></span>time inside kernels</span><span><span class="sw" style="background:var(--grey)"></span>gap (not inside any kernel)</span><span><span class="sw line"></span>weight floor</span></div>
-      <div id="chart-step"></div>
-    </div>
-    <figcaption><b>One decode step of engine #11 under the profiler, batch 1, H100.</b> 2,292 kernels, 8.7 ms inside kernels, 6.9 ms between them, one <code>cudaGraphLaunch</code>, one host sync. Profiler overhead inflates the wall time; the unprofiled step measured 9.6 ms on Dryft. The next change replaces the sixty-kernel layer with a dozen.</figcaption>
-  </figure>
-</section>
-
-<section class="col">
-  <h2>The harness</h2>
-  <p>Every published loop of this kind works the same way: an agent edits, a benchmark scores, the change is kept or reverted. The two things that decide whether such a loop produces anything are whether the benchmark is trustworthy and whether the agent can game it. neoKernel spends most of its code on those two.</p>
-  <p>The judge replicates Dryft's protocol: a fresh engine process per workload, one warmup of the same shape, timed samples with the clock in the parent process, then a teacher-forced replay of the emitted tokens through an untouched native model to apply the 2.0-logit rule at every position. It runs on Modal, correctness on an L4 (correctness does not care which GPU) and throughput on an H100, so a full experiment costs cents and most experiments die before they reach the H100. Every result carries the physics floor, per-kernel timing and the gap between kernels, following the speed-of-light guidance that Chen et al. found roughly doubles what kernel agents achieve.</p>
-  <p>The guard exists because two 2026 studies watched agents cheat: InferenceBench saw fake output tokens under optimization pressure, and KernelGuard catalogued result replay, timer monkeypatching and evaluator mutation. So the agent's write scope is <code>engine/</code> only; the judge is a separate process it cannot import; timing is the judge's; prompts are fresh random ids the agent never sees; a static lint refuses <code>time</code>, CUDA events, <code>sys.modules</code>, <code>exec</code> and anything not importable in Dryft's sandbox; and any result faster than the weight floor is flagged as a suspected hack rather than logged as a win.</p>
-</section>
-
-<section class="wide">
-  <figure>
-    <div class="diagram" id="diagram"></div>
-    <figcaption><b>One experiment.</b> A proposal (from the cheap model in the loop, a stronger coding agent, or the LLM-free sweep) is applied on a git branch and must pass each stage to reach the next. Only the judge writes the log line. Nothing enters <code>engine/</code> any other way.</figcaption>
-  </figure>
-</section>
-
-<section class="col">
-  <h2>Calibration, which was a result</h2>
-  <p>Before any engine change, the unchanged starter went through the local judge and through Dryft. Prefill on the two 8,192-token shapes matched Dryft to within one percent, which says the GPU and the timing points are right. Everything dominated by per-step Python was 7 to 11 ms slower per step, and it stayed slower after requesting eight cores, pinning threads, and moving to a binary pipe with under 0.5 ms of overhead. CPU time per step equalled wall time per step: the container's single core is simply slower than Dryft's, and native Transformers decode is single-threaded Python. That residual cannot be fixed, so the judge does what Dryft does and gates every candidate against native measured in the same container, moments earlier, through the same pipe. The host factor shrinks as the engine stops being CPU-bound; it already moved from 0.69 to 0.72 on the smallest shape once graph capture landed.</p>
-</section>
-
-<section class="wide">
-  <figure>
-    <div class="tw"><table id="calib"></table></div>
-    <figcaption><b>Local judge versus Dryft on the unchanged starter.</b> TTFT on the long-prompt shapes matches; per-step time does not, and the CPU-time column explains why. Gates are relative to local native, so pass and fail decisions do not depend on the host.</figcaption>
-  </figure>
-</section>
-
-<section class="col">
-  <h2>What the agents did, and did not</h2>
-  <p>The loop's first model was GLM 5.2 on Baseten's API. Given a working baseline and a playbook, it proposed the same item, a static KV cache, four times. The first proposal was a unified diff with inconsistent hunk counts that <code>git apply</code> refused; models are bad at byte-exact diffs, so the harness switched to whole-file replacement. The next three were applied, and two failed the correctness check with tensor-shape errors while one failed the guard on mismatched brackets. Each attempt cost under fifteen cents and under a minute of GPU. None was kept.</p>
-  <p>The structural rewrite then went to a stronger coding agent, Codex, through the same funnel. Its first version raised throughput on every shape and was rejected by the judge, correctly, on the time-to-first-token gate: prefill had picked up an explicit attention mask, which drops PyTorch's SDPA off the flash path. The second version used the causal path for prefill and a static boolean mask only for decode, passed all six local gates, and became engine #11. On Dryft it scored 288.5 tokens per second against the starter's 217.3.</p>
-  <p>This is the split InferenceBench measured across fifteen frontier agents: weak at the architectural move, workable on bounded changes to a working base, and beaten by a plain parameter sweep on numeric knobs. neoKernel is built around that finding rather than against it. A strong coding agent does the rewrites that create the switches, a cheap model in a tight loop chooses among the switches, and an LLM-free sweep sets the numbers. All three go through the same judge and the same log, so the record shows who found what. No human wrote engine code. The human built the thing that decides what stays.</p>
-</section>
-
-<section class="wide">
-  <figure>
-    <div class="chips" id="chips" role="group" aria-label="Filter experiments by proposer"></div>
-    <div class="tw"><table id="log"></table></div>
-    <figcaption><b>The experiment log, unedited.</b> Every line is a run of the judge; the geometric mean covers the three public shapes plus three guessed hidden shapes and is local, not Dryft. Filter by who proposed the change.</figcaption>
-  </figure>
-</section>
-
-<section class="wide">
-  <figure>
-    <div class="plot">
-      <div class="legend"><span><span class="sw" style="background:var(--blue)"></span>neoKernel official score</span><span><span class="sw" style="background:var(--grey)"></span>leaderboard leader at the same time</span></div>
-      <div id="chart-board"></div>
-    </div>
-    <figcaption><b>Official Dryft runs so far.</b> Two submissions, both passing every gate. The leader moved from 855 to 1,130 in the same window, which is past what graph capture alone can reach on public-like shapes; it implies batch-heavier hidden workloads, exact speculative decoding at the top, or both.</figcaption>
-  </figure>
-</section>
-
-<section class="col">
-  <h2>What version 1 is, and is not</h2>
-  <p>It is a calibrated evaluator, a judge that has already refused one result correctly, a guard that has caught one malformed proposal, and a log with names on every line. It is one kept optimization on the board. It is not yet a search: the agent has kept nothing on its own, and there was nothing for it to search until the engine's operations became its own. The next change, a hand-rolled decode step over the loaded weights with fused norms, packed projections and grouped-query attention that reads the eight KV heads directly, is what turns the sixty-kernel layer into a dozen and gives the loop switches to flip. Whether the sentence at the top of this page ends up true is decided by what the log says after that.</p>
-  <div class="note">Spend so far: about $3.70 of Modal credit across 22 judge calls, and a few cents of Baseten credit for the agent's proposals. The Dryft runs were free.</div>
-</section>
-
-<section class="col">
-  <h2>Sources</h2>
-  <p>Design decisions on this page trace to these; the repo's <code>docs/DESIGN.md</code> says what was taken from each.</p>
-  <ol class="src">
-    <li>Dryft, Hack the North 2026 kernel challenge: engine contract, optimization guide and starter. <a href="https://htn.dryft.ai/docs">htn.dryft.ai/docs</a></li>
-    <li>RightNow AI, AutoKernel: Autonomous GPU Kernel Optimization via Iterative Agent-Driven Search, arXiv 2603.21331 (keep-or-revert loop, 1 percent keep threshold, five-revert move-on rule; per-kernel scope with cross-kernel fusion listed as future work). <a href="https://arxiv.org/abs/2603.21331">arxiv.org/abs/2603.21331</a></li>
-    <li>Karpathy, autoresearch (single editable scope, frozen evaluation, program.md). <a href="https://github.com/karpathy/autoresearch">github.com/karpathy/autoresearch</a></li>
-    <li>InferenceBench: A Benchmark for Open-Ended LLM Inference Optimization by AI Agents, arXiv 2607.20468 (premature convergence, median of one configuration explored, integrity violations; SMAC3 beat every agent). <a href="https://arxiv.org/abs/2607.20468">arxiv.org/abs/2607.20468</a></li>
-    <li>Lacuna / Tiptree Systems, KernelGuard: defending GPU competitions from adversarial agentic systems (result replay, timer monkeypatching, evaluator mutation; static analysis and a physics floor as defenses). <a href="https://lacuna.tiptreesystems.com/work/we-let-agents-compete-and-they-tried-to-cheat-kernelguard-defending-gpu/wrk_8addb4ee547c113ab8c7edb2c64b9408">lacuna.tiptreesystems.com</a></li>
-    <li>Improving Efficiency of GPU Kernel Optimization Agents using a Domain-Specific Language and Speed-of-Light Guidance, arXiv 2603.29010 (roofline bounds in the agent's context; gap-aware prioritization). <a href="https://arxiv.org/abs/2603.29010">arxiv.org/abs/2603.29010</a></li>
-    <li>Hazy Research, Look Ma, No Bubbles! Designing a Low-Latency Megakernel for Llama-1B (time between operations dominates small-model decode). <a href="https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles">hazyresearch.stanford.edu</a></li>
-    <li>AutoMegaKernel, arXiv 2606.09682 (token-for-token match against the Hugging Face model as the correctness criterion). <a href="https://arxiv.org/abs/2606.09682">arxiv.org/abs/2606.09682</a></li>
-    <li>Meta, KernelAgent (per-kernel tests against the PyTorch reference before composition). <a href="https://github.com/meta-pytorch/KernelAgent">github.com/meta-pytorch/KernelAgent</a></li>
-  </ol>
-</section>
-</main>
-
-<footer class="col">neoKernel · Paarth Sharma · ECE, University of Waterloo · Hack the North 2026. All numbers on this page are reproducible from <code>neokernel/results/</code> in the repository; Dryft figures are from the official run pages.</footer>
-
-<div class="tip" id="tip"></div>
-
-<script>
-// ---------- DATA: edit these blocks when new runs land ----------
-const DATA = {
-  weightBytes: 8044936192,
-  hbmBps: 3.35e12,
-  prefillTflops: 600e12,          // achieved-TFLOPS assumption for the prefill compute floor
-  params: 4.02e9,
-  shapes: [
-    {name:'public-0', label:'batch 1 · 512→32',  B:1,  S:512,  N:32},
-    {name:'public-1', label:'batch 4 · 2048→32', B:4,  S:2048, N:32},
-    {name:'public-2', label:'batch 16 · 512→128',B:16, S:512,  N:128},
-  ],
-  // Official Dryft measurements (public shapes only are visible)
-  official: [
-    {run:'4877cddd', sha:'starter', label:'native starter', ts:'2026-09-19T03:03', score:217.3, rank:12, leader:855,
-     per:{ 'public-0':{tps:57.0, ttft:22.01, tpot:17.41, mem:9.57},
-           'public-1':{tps:150.0,ttft:202.79,tpot:21.01, mem:11.44},
-           'public-2':{tps:671.2,ttft:192.63,tpot:22.51, mem:11.44}}},
-    {run:'69b39b11', sha:'ed314eb', label:'engine #11', ts:'2026-09-19T16:34', score:288.5, rank:42, leader:1130,
-     per:{ 'public-0':{tps:99.7, ttft:22.52, tpot:9.62,  mem:9.63},
-           'public-1':{tps:170.1,ttft:203.42,tpot:17.70, mem:11.84},
-           'public-2':{tps:779.5,ttft:193.03,tpot:19.17, mem:12.01}}},
-  ],
-  profile11: {gpu:'H100', workload:'public-0', wall_ms:15.63, kernel_ms:8.68, gap_ms:6.94, kernels:2292, graph_launches:1, tpot_dryft_ms:9.62,
-              top:[['cutlass bf16 GEMM (relu epilogue), 72 calls',1.77],['memory-efficient attention fwd, 36 calls',0.90],['cutlass bf16 GEMM 128x64, 36 calls',0.81],['cuBLAS gemv, 108 calls',0.81],['elementwise copies and casts, several hundred calls',1.30]]},
-  calibration: [
-    {w:'public-0', nat:40.93, off:57.00, factor:0.7181, ttftN:27.96, ttftO:22.01, tpotN:24.38, tpotO:17.41, cpu:24.30, pipe:0.39},
-    {w:'public-1', nat:139.41,off:150.00,factor:0.9294, ttftN:201.30,ttftO:202.79,tpotN:23.12, tpotO:21.01, cpu:25.16, pipe:0.38},
-    {w:'public-2', nat:645.85,off:671.20,factor:0.9622, ttftN:190.57,ttftO:192.63,tpotN:23.47, tpotO:22.51, cpu:23.33, pipe:0.48},
-  ],
-  log: [
-    {id:1, t:'18:10', who:'human', item:'manual bench (starter)', out:'na',  geo:null,  note:'first H100 calibration; gated against Dryft numbers, failed latency'},
-    {id:2, t:'18:26', who:'human', item:'manual bench (starter)', out:'na',  geo:157.9, note:'cpu=8, binary pipe; gates now relative to local native'},
-    {id:3, t:'18:28', who:'human', item:'manual bench (starter)', out:'na',  geo:144.6, note:'repeat; host factor accepted'},
-    {id:4, t:'18:41', who:'agent', item:'baseline',               out:'kept',geo:216.3, note:'six-workload baseline before proposals'},
-    {id:5, t:'18:42', who:'agent', item:'static_kv_cache',        out:'rev', geo:null,  note:'patch_failed: corrupt unified diff at line 29'},
-    {id:6, t:'18:51', who:'agent', item:'baseline',               out:'kept',geo:251.3, note:'baseline after whole-file proposal format'},
-    {id:7, t:'18:54', who:'agent', item:'static_kv_cache',        out:'rev', geo:null,  note:'correctness check failed: tensor-shape errors on all public shapes'},
-    {id:8, t:'18:54', who:'agent', item:'static_kv_cache',        out:'rev', geo:null,  note:'guard: engine.py:43 mismatched brackets'},
-    {id:9, t:'18:57', who:'agent', item:'static_kv_cache',        out:'rev', geo:null,  note:'correctness check failed: tensor-shape errors'},
-    {id:10,t:'19:10', who:'codex', item:'cuda_graph_decode',      out:'rev', geo:null,  note:'L4 correctness passed; H100 rejected on TTFT gate (explicit prefill mask left the flash path)'},
-    {id:11,t:'19:44', who:'codex', item:'cuda_graph_decode',      out:'kept',geo:323.7, note:'causal prefill, static decode mask, one graph launch; +28.8% local; Dryft 288.5'},
-    {id:12,t:'19:48', who:'agent', item:'baseline',               out:'na',  geo:null,  note:'baseline re-measure hit the 1.05 local TTFT gate on public-0 (host noise; Dryft measured 1.02)'},
-    {id:13,t:'21:11', who:'codex', item:'hand_rolled_decode',     out:'na',  geo:null,  note:'in progress: kernel unit tests pass (RMSNorm, QK-norm+RoPE, SiLU-mul exact; attention max abs diff 0.0039)'},
-  ],
-  spend: {modal_usd:3.70, calls:22, l4_usd:0.83, h100_usd:2.87},
-};
-
-// ---------- helpers ----------
-const $ = s => document.querySelector(s);
-const fmt = (n,d=1) => n.toLocaleString('en-US',{maximumFractionDigits:d,minimumFractionDigits:d});
-const tip = $('#tip');
-function bindTips(root){
-  root.querySelectorAll('[data-tip]').forEach(el=>{
-    el.addEventListener('mousemove',e=>{tip.textContent=el.getAttribute('data-tip');tip.classList.add('on');
-      const x=Math.min(e.clientX+14,window.innerWidth-300), y=e.clientY+16; tip.style.left=x+'px'; tip.style.top=y+'px';});
-    el.addEventListener('mouseleave',()=>tip.classList.remove('on'));
-  });
-}
-function floors(s){
-  const step = DATA.weightBytes/DATA.hbmBps;
-  const decode = (s.N-1)*step;
-  const prefill = 2*DATA.params*s.B*s.S/DATA.prefillTflops;
-  const total = decode+prefill;
-  return {step, decode, prefill, total, tps: s.B*s.N/total};
-}
-
-// ---------- tiles ----------
-(function(){
-  const last = DATA.official[DATA.official.length-1];
-  const f0 = floors(DATA.shapes[0]);
-  const frac = last.per['public-0'].tps / f0.tps;
-  $('#tiles').innerHTML = `
-    <div class="tile"><div class="l">Official score, latest run</div><div class="v">${fmt(last.score)}<span class="u">tok/s</span></div><div class="s">rank ${last.rank} · leader ${fmt(last.leader,0)} · starter ${fmt(DATA.official[0].score)}</div></div>
-    <div class="tile"><div class="l">Kernels per decode step</div><div class="v">${DATA.profile11.kernels.toLocaleString()}</div><div class="s">one CUDA graph launch · ${fmt(DATA.profile11.kernel_ms)} ms in kernels · ${fmt(DATA.profile11.gap_ms)} ms gap</div></div>
-    <div class="tile"><div class="l">Fraction of the floor, batch 1</div><div class="v">${fmt(frac,2)}</div><div class="s">${fmt(last.per['public-0'].tps)} of ${fmt(f0.tps,0)} tok/s possible · floor step ${fmt(f0.step*1000,2)} ms</div></div>`;
-})();
-
-// ---------- floor math ----------
-(function(){
-  const step = DATA.weightBytes/DATA.hbmBps;
-  let s = `weight_bytes      = ${DATA.weightBytes.toLocaleString()} B   (sum of numel × 2 over the loaded BF16 parameters)\n`;
-  s += `step_floor        = weight_bytes / 3.35e12 B/s = ${fmt(step*1000,3)} ms\n`;
-  s += `prefill_floor(B,S)= 2 × 4.02e9 × B × S / 600e12   (achieved-TFLOPS assumption, stated)\n`;
-  s += `ceiling_tps(B,S,N)= B × N / (prefill_floor + (N − 1) × step_floor)\n\n`;
-  DATA.shapes.forEach(sh=>{const f=floors(sh); s += `${sh.name.padEnd(9)} B=${String(sh.B).padEnd(3)} S=${String(sh.S).padEnd(5)} N=${String(sh.N).padEnd(4)} prefill ${fmt(f.prefill*1000,1).padStart(6)} ms  decode ${fmt(f.decode*1000,1).padStart(6)} ms  ceiling ${fmt(f.tps,0).padStart(5)} tok/s\n`;});
-  $('#floor-math').textContent = s;
-})();
-
-// ---------- chart: fraction of floor ----------
-(function(){
-  const W=820, rowH=62, padL=170, padR=70, top=26, H=top+DATA.shapes.length*rowH+30;
-  const x = v => padL + v*(W-padL-padR);
-  let g = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Fraction of physical ceiling per workload">`;
-  [0,.25,.5,.75,1].forEach(v=>{g+=`<line class="grid" x1="${x(v)}" x2="${x(v)}" y1="${top-8}" y2="${H-26}"/><text x="${x(v)}" y="${H-10}" text-anchor="middle">${Math.round(v*100)}%</text>`;});
-  DATA.shapes.forEach((s,i)=>{
-    const f=floors(s), y=top+i*rowH;
-    const nat=DATA.official[0].per[s.name], cur=DATA.official[1].per[s.name];
-    const fn=nat.tps/f.tps, fc=cur.tps/f.tps;
-    g+=`<text class="lab" x="${padL-14}" y="${y+18}" text-anchor="end">${s.label}</text>`;
-    g+=`<rect class="bar native" x="${padL}" y="${y}" width="${x(fn)-padL}" height="14" rx="0"/><text x="${x(fn)+8}" y="${y+11}">${fmt(nat.tps,0)}</text>`;
-    g+=`<rect class="bar cur" x="${padL}" y="${y+18}" width="${x(fc)-padL}" height="14"/><text class="lab" x="${x(fc)+8}" y="${y+29}">${fmt(cur.tps,0)}</text>`;
-    g+=`<rect class="hit" x="${padL}" y="${y-4}" width="${W-padL-padR}" height="40" data-tip="${s.label}\nceiling ${fmt(f.tps,0)} tok/s\nnative ${fmt(nat.tps)} tok/s (${fmt(fn*100,0)}%)\nengine #11 ${fmt(cur.tps)} tok/s (${fmt(fc*100,0)}%)"/>`;
-  });
-  g+=`<line class="floor" x1="${x(1)}" x2="${x(1)}" y1="${top-8}" y2="${H-26}"/><text x="${x(1)+8}" y="${top+4}" class="lab">floor</text>`;
-  g+='</svg>';
-  $('#chart-floor').innerHTML=g; bindTips($('#chart-floor'));
-})();
-
-// ---------- chart: TPOT ----------
-(function(){
-  const W=820, H=230, padL=170, padR=40, top=20, bottom=36, max=25;
-  const x = v => padL + (v/max)*(W-padL-padR);
-  const rowH=(H-top-bottom)/DATA.shapes.length;
-  let g=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Time per output token per workload">`;
-  [0,5,10,15,20,25].forEach(v=>{g+=`<line class="grid" x1="${x(v)}" x2="${x(v)}" y1="${top-6}" y2="${H-bottom}"/><text x="${x(v)}" y="${H-14}" text-anchor="middle">${v} ms</text>`;});
-  DATA.shapes.forEach((s,i)=>{
-    const y=top+i*rowH+8, nat=DATA.official[0].per[s.name].tpot, cur=DATA.official[1].per[s.name].tpot;
-    g+=`<text class="lab" x="${padL-14}" y="${y+18}" text-anchor="end">${s.label}</text>`;
-    g+=`<rect class="bar native" x="${padL}" y="${y}" width="${x(nat)-padL}" height="14"/><text x="${x(nat)+8}" y="${y+11}">${fmt(nat,1)}</text>`;
-    g+=`<rect class="bar cur" x="${padL}" y="${y+18}" width="${x(cur)-padL}" height="14"/><text class="lab" x="${x(cur)+8}" y="${y+29}">${fmt(cur,1)}</text>`;
-    g+=`<rect class="hit" x="${padL}" y="${y-4}" width="${W-padL-padR}" height="40" data-tip="${s.label}\nnative TPOT ${fmt(nat,2)} ms\nengine #11 TPOT ${fmt(cur,2)} ms (${fmt(cur/nat,2)}× native)\nfloor 2.40 ms → ${fmt(cur/2.4015,1)}× off the floor"/>`;
-  });
-  const fx=x(DATA.weightBytes/DATA.hbmBps*1000);
-  g+=`<line class="floor" x1="${fx}" x2="${fx}" y1="${top-6}" y2="${H-bottom}"/>`;
-  g+='</svg>';
-  $('#chart-tpot').innerHTML=g; bindTips($('#chart-tpot'));
-})();
-
-// ---------- chart: step anatomy ----------
-(function(){
-  const p=DATA.profile11, W=820, H=120, padL=20, padR=20, max=16;
-  const x=v=>padL+(v/max)*(W-padL-padR);
-  let g=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Decode step anatomy">`;
-  [0,4,8,12,16].forEach(v=>{g+=`<line class="grid" x1="${x(v)}" x2="${x(v)}" y1="18" y2="${H-30}"/><text x="${x(v)}" y="${H-10}" text-anchor="middle">${v} ms</text>`;});
-  const fx0=x(DATA.weightBytes/DATA.hbmBps*1000);
-  g+=`<line class="floor" x1="${fx0}" x2="${fx0}" y1="18" y2="${H-30}"/><text class="lab" x="${fx0+6}" y="80">floor 2.40 ms</text>`;
-  g+=`<rect class="bar kern" x="${x(0)}" y="34" width="${x(p.kernel_ms)-x(0)-2}" height="26" data-tip="inside kernels: ${fmt(p.kernel_ms,2)} ms\n${p.kernels.toLocaleString()} kernels in one graph\ntop: ${p.top.map(t=>t[0]+' '+fmt(t[1],2)+' ms').join('\n')}"/>`;
-  g+=`<rect class="bar gap" x="${x(p.kernel_ms)}" y="34" width="${x(p.kernel_ms+p.gap_ms)-x(p.kernel_ms)}" height="26" data-tip="gap (not inside any kernel): ${fmt(p.gap_ms,2)} ms\nincludes profiler overhead; unprofiled step on Dryft: ${fmt(p.tpot_dryft_ms,2)} ms"/>`;
-  g+=`<text class="lab" x="${x(0)+8}" y="51" style="fill:#fff">${fmt(p.kernel_ms,1)} ms · ${p.kernels.toLocaleString()} kernels</text>`;
-  g+=`<text class="lab" x="${x(p.kernel_ms)+8}" y="51" style="fill:#fff">gap ${fmt(p.gap_ms,1)} ms</text>`;
-  g+='</svg>';
-  $('#chart-step').innerHTML=g; bindTips($('#chart-step'));
-})();
-
-// ---------- diagram ----------
-(function(){
-  const boxes=[
-    ['proposal','agent · codex · sweep',14],
-    ['guard','lint · scope',148],
-    ['check','L4 · token replay',282],
-    ['fast bench','H100 · 2 shapes',416],
-    ['full bench','H100 · 6 shapes',550],
-    ['judge','gates · floor · keep',684],
-  ];
-  let g=`<svg viewBox="0 0 800 150" role="img" aria-label="Experiment pipeline">`;
-  g+=`<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="arr"/></marker></defs>`;
-  boxes.forEach((b,i)=>{
-    const cls=b[0]==='judge'?'judge':'box';
-    g+=`<rect class="${cls}" x="${b[2]}" y="40" width="118" height="52" rx="3"/>`;
-    g+=`<text x="${b[2]+59}" y="61" text-anchor="middle">${b[0]}</text><text class="sub" x="${b[2]+59}" y="79" text-anchor="middle">${b[1]}</text>`;
-    if(i<boxes.length-1) g+=`<line x1="${b[2]+118}" y1="66" x2="${boxes[i+1][2]-1}" y2="66" marker-end="url(#ah)"/>`;
-  });
-  g+=`<path d="M743,92 C743,126 60,126 73,96" marker-end="url(#ah)"/><text class="sub" x="400" y="140" text-anchor="middle">log line written by the judge only → git keep or revert → next proposal reads the log, the profile and the floors</text>`;
-  g+='</svg>';
-  $('#diagram').innerHTML=g;
-})();
-
-// ---------- calibration table ----------
-(function(){
-  let h=`<thead><tr><th>Workload</th><th class="num">Local native tok/s</th><th class="num">Dryft native tok/s</th><th class="num">Host factor</th><th class="num">TTFT local / Dryft (ms)</th><th class="num">TPOT local / Dryft (ms)</th><th class="num">CPU per step (ms)</th><th class="num">Pipe (ms)</th></tr></thead><tbody>`;
-  DATA.calibration.forEach(r=>{h+=`<tr><td>${r.w}</td><td class="num">${fmt(r.nat,2)}</td><td class="num">${fmt(r.off,2)}</td><td class="num">${fmt(r.factor,3)}</td><td class="num">${fmt(r.ttftN,1)} / ${fmt(r.ttftO,1)}</td><td class="num">${fmt(r.tpotN,1)} / ${fmt(r.tpotO,1)}</td><td class="num">${fmt(r.cpu,1)}</td><td class="num">${fmt(r.pipe,2)}</td></tr>`;});
-  $('#calib').innerHTML=h+'</tbody>';
-})();
-
-// ---------- log table with filter ----------
-(function(){
-  const who={all:'All',agent:'GLM 5.2 in the loop',codex:'Codex',human:'Manual'};
-  let sel='all';
-  const chips=$('#chips');
-  Object.keys(who).forEach(k=>{const b=document.createElement('button');b.className='chip';b.textContent=who[k];b.setAttribute('aria-pressed',k===sel);b.onclick=()=>{sel=k;[...chips.children].forEach(c=>c.setAttribute('aria-pressed',c.textContent===who[k]));render();};chips.appendChild(b);});
-  function pill(o){return o==='kept'?'<span class="pill kept">kept</span>':o==='rev'?'<span class="pill rev">reverted</span>':'<span class="pill na">no decision</span>';}
-  function render(){
-    let h=`<thead><tr><th>#</th><th>Time</th><th>Proposer</th><th>Item</th><th>Outcome</th><th class="num">Local geomean</th><th>What happened</th></tr></thead><tbody>`;
-    DATA.log.filter(r=>sel==='all'||r.who===sel).forEach(r=>{h+=`<tr><td class="num">${r.id}</td><td class="num">${r.t}</td><td>${r.who==='agent'?'GLM 5.2':r.who==='codex'?'Codex':'manual'}</td><td><code>${r.item}</code></td><td>${pill(r.out)}</td><td class="num">${r.geo==null?'·':fmt(r.geo)}</td><td>${r.note}</td></tr>`;});
-    $('#log').innerHTML=h+'</tbody>';
-  }
-  render();
-})();
-
-// ---------- chart: leaderboard ----------
-(function(){
-  const W=820,H=260,padL=70,padR=40,top=24,bottom=40,max=1200;
-  const pts=DATA.official;
-  const t0=new Date(pts[0].ts).getTime(), t1=new Date(pts[pts.length-1].ts).getTime()+3600e3;
-  const x=t=>padL+((new Date(t).getTime()-t0)/(t1-t0))*(W-padL-padR);
-  const y=v=>top+(1-v/max)*(H-top-bottom);
-  let g=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Official score over time">`;
-  [0,300,600,900,1200].forEach(v=>{g+=`<line class="grid" x1="${padL}" x2="${W-padR}" y1="${y(v)}" y2="${y(v)}"/><text x="${padL-10}" y="${y(v)+4}" text-anchor="end">${v.toLocaleString()}</text>`;});
-  const path=k=>pts.map((p,i)=>(i?'L':'M')+x(p.ts)+','+y(p[k])).join(' ');
-  g+=`<path d="${path('leader')}" stroke="var(--grey)" stroke-width="2" fill="none" stroke-linecap="round"/>`;
-  g+=`<path d="${path('score')}" stroke="var(--blue)" stroke-width="2" fill="none" stroke-linecap="round"/>`;
-  pts.forEach(p=>{
-    const tm=new Date(p.ts); const lab=tm.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    g+=`<circle cx="${x(p.ts)}" cy="${y(p.leader)}" r="5" fill="var(--grey)" stroke="var(--surface)" stroke-width="2"/>`;
-    g+=`<circle cx="${x(p.ts)}" cy="${y(p.score)}" r="5" fill="var(--blue)" stroke="var(--surface)" stroke-width="2"/>`;
-    const last=(p===pts[pts.length-1]), ax=last?'end':'start', dx=last?-12:12;
-    g+=`<text class="lab" x="${x(p.ts)+dx}" y="${y(p.score)-10}" text-anchor="${ax}">${fmt(p.score)} · rank ${p.rank}</text>`;
-    g+=`<text x="${x(p.ts)+dx}" y="${y(p.leader)-10}" text-anchor="${ax}">leader ${p.leader.toLocaleString()}</text>`;
-    g+=`<text x="${x(p.ts)}" y="${H-14}" text-anchor="middle">${lab}</text>`;
-    g+=`<rect class="hit" x="${x(p.ts)-30}" y="${top}" width="60" height="${H-top-bottom}" data-tip="run ${p.run} (${p.label})\nofficial ${fmt(p.score)} tok/s, rank ${p.rank}\nleader ${p.leader.toLocaleString()} tok/s\npublic: ${fmt(p.per['public-0'].tps,0)} / ${fmt(p.per['public-1'].tps,0)} / ${fmt(p.per['public-2'].tps,0)}"/>`;
-  });
-  g+='</svg>';
-  $('#chart-board').innerHTML=g; bindTips($('#chart-board'));
-})();
-</script>
-
-</body>
-</html>
+<section id="notes" class="prose"><div class="eyebrow">SOURCES</div><h2>Code, evidence and research.</h2><p>This page uses a checked-in snapshot of the automated entries in the local experiment log. Missing measurements stay missing. Baseline checks are labelled separately. Later manual optimization results are excluded.</p><div class="source-links"><a href="V1.md">Version 1 scope and evidence <span>↗</span></a><a href="v1-evidence.json">Curated experiment data <span>↓</span></a><a href="https://github.com/cogniera/neoKernel/tree/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel">Harness source at this version <span>↗</span></a></div><h3>Technical references</h3><p>These sources inform the research directions above. Their results are not neoKernel results.</p><div class="source-links">
+<a href="https://arxiv.org/abs/2502.10517">KernelBench: Can LLMs Write Efficient GPU Kernels? <span>↗</span></a>
+<a href="https://pytorch.org/blog/kernelagent-hardware-guided-gpu-kernel-optimization-via-multi-agent-orchestration/">KernelAgent: Hardware-Guided GPU Kernel Optimization <span>↗</span></a>
+<a href="https://www.usenix.org/conference/osdi20/presentation/zheng">Ansor: Generating High-Performance Tensor Programs <span>↗</span></a>
+<a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/neokernel/judge.py">Local judge and acceptance rules <span>↗</span></a>
+<a href="https://github.com/cogniera/neoKernel/blob/aa662a35a155c333b7c8965061d38574db68cfaf/QWEN_ENGINE_CONTRACT.md">Engine evaluation contract <span>↗</span></a>
+</div></section>
+</article></div></main>
+<footer><a class="wordmark" href="#top">neoKernel <span>v1</span></a><span>Built by <a href="https://paarths.dev/">Paarth Sharma</a></span><a href="#top">Back to top ↑</a></footer>
+</body></html>

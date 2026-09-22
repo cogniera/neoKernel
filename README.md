@@ -1,91 +1,71 @@
 # neoKernel
 
-neoKernel is a local harness and Qwen3 4B inference engine for the Dryft benchmark, with native, graph-based and hand-rolled stages recorded in [the official results](neokernel/results/dryft_runs.json).
-The saved experiments compare complete generation, check emitted tokens against an independent native model, and record accepted and rejected changes in [the experiment log](docs/log.md).
-The latest accepted local candidate uses hand-rolled decode and native prefill CUDA graphs, with its five-sample freeze saved in [FREEZE.json](neokernel/results/freeze_prefill_graph/FREEZE.json).
+An automated research loop for Qwen3 inference. A model proposes a source change. The harness checks it, measures it and keeps or restores the candidate. Every attempt leaves a record.
 
-## Recorded numbers
+**Version 1** marks the project as it stood on September 22, 2026. The main documentation covers only the automated harness loop. Manually authored engine optimizations are outside that narrative.
 
-| Engine stage | Official run | Hidden-workload score, tok/s | Rank at capture | Public B1 / B4 / B16, tok/s |
-| --- | --- | ---: | ---: | --- |
-| Native starter | 4877cddd | 217.3 | 12 | 57.0 / 150.0 / 671.2 |
-| #11 static cache and decode graph | 69b39b11 | 288.5 | 42 | 99.7 / 170.1 / 779.5 |
-| #18 hand-rolled lineage, with native prefill graph | 1bf05baa | 670.7 | 38 | 191.6 / 328.6 / 2104.4 |
+[Read the interactive documentation](docs/index.html) · [Version 1 notes](docs/V1.md) · [Experiment evidence](docs/v1-evidence.json)
 
-Source: [hand-kept official records and run-page links](neokernel/results/dryft_runs.json).
-Ranks are historical snapshots. The last row is commit `012646d`, Dryft submission #5 and local freeze #25; it is not the failed local benchmark at log #18.
-
-| H100 decode profile | B1 kernels / kernel ms / gap ms | B16 kernels / kernel ms / gap ms |
-| --- | --- | --- |
-| #11 baseline | 2292 / 8.070 / 6.311 | 2400 / 17.457 / 6.004 |
-| #18 hand-rolled decode | 439 / 4.279 / 2.369 | 475 / 5.810 / 2.625 |
-
-Sources: `neokernel/results/hand_rolled_profile_{before,after}_{public-0,public-2}.json`, linked individually in [RESULTS.md](docs/RESULTS.md).
-These are instrumented local decode profiles, not website latency measurements.
-The subsequent prefill graph freeze passed all six local workloads at five samples each; its worst TTFT/native ratio was 0.9906. Source: [freeze record](neokernel/results/freeze_prefill_graph/FREEZE.json).
-
-## Commands
-
-Run from the repository root with Python 3.11. GPU commands require the dependencies in [neokernel/requirements.txt](neokernel/requirements.txt), an authenticated Modal account and the pinned checkpoint already present in the configured Modal volume. The auto command also requires `BASETEN_API_KEY` in the environment. Do not put credentials in source or result files.
+## Open the documentation
 
 ```powershell
-# Offline source validation and documentation
-py -3.11 -m neokernel guard
-py -3.11 -m neokernel report
-
-# Public correctness on L4
-py -3.11 -m neokernel check --workloads public
-
-# Paired native timing on H100
-py -3.11 -m neokernel bench --workloads all --samples 5 --refresh-native
-
-# One warm decode step on L4; do not compare directly with H100 profiles
-py -3.11 -m neokernel profile --workload public-0
-
-# One attended structural proposal through GLM
-py -3.11 -m neokernel auto --attended --steps 1 --workloads all --max-gpu-minutes 5
-
-# Optional numeric search without a model API
-py -3.11 -m neokernel sweep --steps 1 --workloads public --max-gpu-minutes 5
-
-# Public L4 correctness, then five H100 samples per selected workload
-py -3.11 -m neokernel freeze --out neokernel/results/freeze_candidate --workloads all
+python -m http.server 8765 --bind 127.0.0.1 --directory docs
 ```
 
-GPU commands spend money and enforce the ledger's reservation checks. `--max-gpu-minutes` is an additional bound for auto and sweep, not a dollar estimate. Freeze requires a new output directory and does not submit to Dryft. Command definitions are in [cli.py](neokernel/cli.py); measured invocations and spending are recorded in [log.md](docs/log.md) and [RESULTS.md](docs/RESULTS.md).
+Open [the local preview](http://127.0.0.1:8765/). The site has a rotatable 3D model of the loop, a step-through experiment diagram, a token replay example and a browser for the recorded automated trials. It is static HTML, CSS and JavaScript with no build step. It also opens directly from `docs/index.html`.
 
-`report` reads saved files only. Edit `neokernel/results/dryft_runs.json` by hand when a new official result is available, then regenerate both Markdown tables. Bulk raw results are ignored by Git; a fresh clone retains the published tables and the versioned official record but needs the local raw artifacts to reproduce every local table.
+## The loop
 
-## Repository layout
+1. Measure the current engine as a baseline.
+2. Propose a bounded change using the source, profile and experiment history.
+3. Validate replacement files and run the source guard.
+4. Run unit tests with up to two model repair attempts, then public correctness checks.
+5. Benchmark the candidate against the native reference.
+6. Save the result and keep or restore the candidate.
+
+A local keep needs every gate to pass, more than 1% aggregate throughput improvement and no selected workload more than 3% below baseline. The candidate cannot replace the judge or its tests.
+
+## What the record shows
+
+The Version 1 snapshot contains 27 automated entries: three baseline checks and 24 proposal attempts. These include failed and interrupted attempts. Baselines are measurements of the current engine, not improvements produced by the loop.
+
+Trial 37 was kept locally and later reverted after external evaluation. Trial 39 failed local replay and was later marked kept after external evaluation. Trial 44 regressed and was reverted. The [evidence notes](docs/V1.md#evidence) preserve those distinctions and the limits of the recorded sources.
+
+The external evaluator is Dryft. Its hidden workload score is separate from the local harness's public and proxy workload measurements. See the [engine contract](QWEN_ENGINE_CONTRACT.md) for evaluation rules.
+
+## Run the harness
+
+Use Python 3.11 from the repository root. Start with the offline commands:
+
+```powershell
+py -3.11 -m neokernel guard
+py -3.11 -m neokernel report
+```
+
+The automated loop also needs the dependencies in [neokernel/requirements.txt](neokernel/requirements.txt), a configured Modal account, the pinned checkpoint in its volume and `BASETEN_API_KEY` in the environment. The working tree must be clean on `main`.
+
+```powershell
+# One proposal attempt. Uses paid GPU and model inference.
+py -3.11 -m neokernel auto --steps 1 --workloads all --max-gpu-minutes 5
+```
+
+Budget reservations can stop dispatch before the requested attempt completes. Use `--resume` to recover an interrupted loop. Kept changes are committed and merged locally. The loop never pushes. See [setup and recovery](neokernel/README.md) for details.
+
+## Repository
 
 | Path | Purpose |
 | --- | --- |
-| `engine/` | Submitted Engine and imported Python/Triton kernels. |
-| `neokernel/` | Local judge, guard, Modal commands, proposal loop, numeric sweep and report generator. |
-| `neokernel/results/` | Local logs, raw runs, profiles, spend ledger and frozen artifacts; official records are in `dryft_runs.json`. |
-| `agent/` | Dryft API client and source archive packager. |
+| `engine/` | Inference engine and the kernels it imports. |
+| `neokernel/` | Proposal loop, guard, judge, GPU orchestration and recovery. |
+| `agent/` | Source packager and external evaluation client. |
 | `tests/` | CPU regressions and GPU numerical checks. |
-| `experiments/` | Saved experiment source outside the submitted engine. |
-| `docs/` | Results, design, calibration, numerical evidence and the HTML overview. |
+| `docs/` | Version 1 site, evidence snapshot and technical notes. |
+| `experiments/` | Saved experimental source outside the engine archive. |
 
-The [freeze record](neokernel/results/freeze_prefill_graph/FREEZE.json) identifies the measured engine archive. Harness and agent files are excluded from that archive.
+The site uses a checked-in evidence export so it works without the ignored raw results directory. [build_v1_evidence.py](docs/build_v1_evidence.py) regenerates that fixed snapshot when the local source log is available.
 
-## Documentation
+Earlier [design notes](docs/DESIGN.md), [measurement tables](docs/RESULTS.md) and [experiment log](docs/log.md) remain as historical records. They have broader scope than the Version 1 article and can describe earlier implementations. For current harness behavior, use the source linked from the Version 1 notes.
 
-- [Results and spending](docs/RESULTS.md)
-- [Experiment log](docs/log.md)
-- [Design and proposal format](docs/DESIGN.md)
-- [Hand-rolled decode measurements](docs/HAND_ROLLED_DECODE.md)
-- [Prefill latency follow-up](docs/PREFILL_LATENCY_FIX.md)
-- [Calibration and host differences](docs/CALIBRATION.md)
-- [Graph diagnosis](docs/GRAPH_DIAGNOSIS.md)
-- [Judge review](docs/JUDGE_REVIEW.md)
-- [HTML overview](docs/index.html), a separately maintained historical narrative; use RESULTS.md for the generated measurement tables.
+## Future work
 
-## Sources
-
-- [Official Dryft runs, including page URLs and measurement provenance](neokernel/results/dryft_runs.json).
-- [Local results, profiles, floors and spend source links](docs/RESULTS.md) and [append-only log export](docs/log.md).
-- [Engine contract](QWEN_ENGINE_CONTRACT.md) and [Qwen implementation guide](OPTIMIZATION_GUIDE.md).
-- [InferenceBench](https://arxiv.org/abs/2607.20468), motivation for separating structural exploration and numeric search; this project does not reproduce its paper results.
-- [Design references](docs/DESIGN.md#design-decisions-and-their-sources), including AutoKernel, autoresearch, KernelGuard, Speed-of-Light Guidance, Hazy Research and KernelAgent.
+Version 2 will focus on multiple agent swarms working in parallel, API provider independence and GPU provider independence. The longer term goal is an installable Python package for reproducible inference research. These are planned features. Check the [Future work section](docs/index.html#future) for more details and technical sources.
