@@ -12,9 +12,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 from agent.package import package
-from .guard import GuardError, check
+from .guard import check
 from .accounting import GPU_TIMEOUT_S, SpendLedger, SpendLimit, record_stop, estimate_usd
 from .calibration import equivalent_estimates, load_calibration, refresh_host_factors
+from .judge import OFFICIAL
 from .schema import PUBLIC, select_workloads
 from .storage import ROOT, RESULTS, Budget, append_log, git_sha, read_log, save_run, seed_native, write_json
 
@@ -56,7 +57,6 @@ def report(result: dict, correctness_only=False):
                 fmt(r.get("cpu_step_ms", {}).get("mean"), 4), fmt(r.get("cpu_step_ms", {}).get("max"), 4),
                 r.get("measurement_order", "")] for r in result["workloads"]])
         if result.get("native"):
-            from .calibration import OFFICIAL
             table("Local native reference; host correction = native / official", ["workload", "native tok/s", "host factor", "native TTFT ms", "native TPOT ms"],
                   [[name, fmt(n["tps"]), fmt(n["tps"]/OFFICIAL[name]["tps"], 4) if name in OFFICIAL else "n/a",
                     fmt(n["ttft_median"]*1000), fmt(n["tpot_median"]*1000)] for name, n in result["native"].items()])
@@ -131,79 +131,60 @@ class Remote:
         if self.budget:
             self.budget.charge(seconds)
 
+    def dispatch(self, tier, operation, call, **record_options):
+        """Run one remote call against the GPU budget; a call that raises is billed at its timeout."""
+        timeout_s = record_options.get("timeout_s", GPU_TIMEOUT_S)
+        self.reserve(timeout_s)
+        started = time.perf_counter()
+        try:
+            result = call()
+        except BaseException:
+            self.charge(timeout_s)
+            try:
+                self.spend.record(tier, started, None, operation, False, **record_options)
+            except SpendLimit:
+                pass  # Preserve the original harness failure and its traceback.
+            raise
+        self.charge(result.get("gpu_seconds", 0))
+        return started, result
+
     def bench(self, payload, workloads, samples=3, correctness_only=False, refresh_native=False, transport=None):
         smoke = self.smoke_check and correctness_only
         if smoke and list(workloads) != [PUBLIC[0]]:
             raise ValueError('Smoke check accepts only public-0')
-        timeout_s = 60 if smoke else GPU_TIMEOUT_S
-        self.reserve(timeout_s)
         tier = "L4" if correctness_only else "H100"
+        operation = "check" if correctness_only else "bench"
         record_options = {'idle_s': 0, 'timeout_s': 60} if smoke else {}
         if smoke:
             self.spend.reserve_amount('L4', estimate_usd('L4', 120), 'bounded public-0 check')
         else:
             self.spend.reserve(tier)
-        started = time.perf_counter()
-        try:
-            if correctness_only:
-                endpoint = self.api.check_smoke_remote if smoke else self.api.check_remote
-                result = endpoint.remote(payload, [asdict(w) for w in workloads], self.native)
-            else:
-                result = self.api.judge_remote.remote(payload, [asdict(w) for w in workloads], samples,
-                                                      refresh_native, self.native, False,
-                                                      transport=transport or (load_calibration() or {}).get("transport", "json"))
-        except BaseException:
-            self.charge(timeout_s)
-            try:
-                self.spend.record(tier, started, None, "check" if correctness_only else "bench", False, **record_options)
-            except SpendLimit:
-                pass  # Preserve the original harness failure and its traceback.
-            raise
+        shapes = [asdict(w) for w in workloads]
+        if correctness_only:
+            endpoint = self.api.check_smoke_remote if smoke else self.api.check_remote
+            call = lambda: endpoint.remote(payload, shapes, self.native)
+        else:
+            call = lambda: self.api.judge_remote.remote(
+                payload, shapes, samples, refresh_native, self.native, False,
+                transport=transport or (load_calibration() or {}).get("transport", "json"))
+        started, result = self.dispatch(tier, operation, call, **record_options)
         self.native = result["native"]
-        self.charge(result["gpu_seconds"])
         save_run(result, payload)
-        self.spend.record(tier, started, result["gpu_seconds"], "check" if correctness_only else "bench", result["eligible"], **record_options)
+        self.spend.record(tier, started, result["gpu_seconds"], operation, result["eligible"], **record_options)
         if not correctness_only:
             refresh_host_factors(result)
         return result
 
     def unit_tests(self, sources):
         """Repair-stage kernel and handoff tests on L4; the result is diagnostic, never a keep input."""
-        self.reserve(GPU_TIMEOUT_S)
         self.spend.reserve("L4")
-        started = time.perf_counter()
-        try:
-            result = self.api.unit_test_remote.remote(sources)
-        except BaseException:
-            self.charge(GPU_TIMEOUT_S)
-            try:
-                self.spend.record("L4", started, None, "unit_tests", False)
-            except SpendLimit:
-                pass
-            raise
-        self.charge(result.get("gpu_seconds", 0))
+        started, result = self.dispatch("L4", "unit_tests", lambda: self.api.unit_test_remote.remote(sources))
         self.spend.record("L4", started, result.get("gpu_seconds", 0), "unit_tests", result["passed"])
         return result
 
-    def many(self, payloads, workloads, samples=2, validate_rmsnorm=False):
-        if validate_rmsnorm:
-            raise ValueError('Use the tested staged sweep for RMSNorm integration')
-        return [self.bench(payload, workloads, samples) for payload in payloads]
-
     def profile(self, payload, workload):
-        self.reserve(GPU_TIMEOUT_S)
         self.spend.reserve("L4")
-        started = time.perf_counter()
-        try:
-            result = self.api.profile_remote.remote(payload, asdict(workload))
-        except BaseException:
-            self.charge(GPU_TIMEOUT_S)
-            try:
-                self.spend.record("L4", started, None, "profile", False)
-            except SpendLimit:
-                pass
-            raise
-        self.charge(result.get("gpu_seconds", 0))
+        started, result = self.dispatch("L4", "profile", lambda: self.api.profile_remote.remote(payload, asdict(workload)))
         write_json(RESULTS / "profile.json", result)
         self.spend.record("L4", started, result.get("gpu_seconds", 0), "profile", True)
         return result
@@ -229,6 +210,7 @@ def engine_at(ref: str, destination: Path) -> Path:
 def race(remote, a, b, workload):
     from rich.live import Live
     from rich.table import Table
+    from rich.text import Text
     streams = ["", ""]
     elapsed = [0.0, 0.0]
     profiles = {}
@@ -250,7 +232,6 @@ def race(remote, a, b, workload):
                 grid = Table()
                 grid.add_column(f"A: {a} ({elapsed[0]:.1f} ms)")
                 grid.add_column(f"B: {b} ({elapsed[1]:.1f} ms)")
-                from rich.text import Text
                 grid.add_row(Text(streams[0][-2000:]), Text(streams[1][-2000:]))
                 live.update(grid)
         for side, profile in profiles.items():
@@ -279,8 +260,6 @@ def parser():
             cmd.add_argument('--resume', action='store_true')
         if name == "auto":
             cmd.add_argument("--model", default="zai-org/GLM-5.2")
-            cmd.add_argument("--attended", action=argparse.BooleanOptionalAction, default=False,
-                             help='legacy flag; overnight mode has no approval pauses')
             cmd.add_argument("--items")
         if name == "sweep":
             cmd.add_argument("--random", action="store_true")
@@ -334,7 +313,7 @@ def main(argv=None) -> int:
             from .loop import run_loop
             from .sweep import run_sweep
             from .transaction import Transaction, crash
-            from .night import exclusive, night_watch, morning
+            from .night import exclusive, night_watch
             with exclusive():
                 # Recovery precedes guard and imports/remote dispatch.
                 Transaction(ROOT, RESULTS).startup(args.resume)

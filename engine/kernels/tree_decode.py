@@ -6,25 +6,20 @@ sequence b. With a one-node tree this is ordinary single-token decode.
 
 import torch
 from kernels import CONFIG, TUNABLES
-from kernels.elementwise import norm_out, silu_mul_out
+from kernels.elementwise import silu_mul_out
+from kernels.rmsnorm import norm_out
+from kernels.tree import DraftTree
 from kernels.tree_ops import qk_rope_cache_out
 from kernels.tree_attention import attention_out
 
 
 class TreeDecodeBuffers:
-    def __init__(self, batch, capacity, device, config=None, tree=None, scratch=True):
-        from kernels.tree import DraftTree
+    def __init__(self, batch, capacity, device, config=None, tree=None):
         self.config = dict(CONFIG if config is None else config)
-        if self.config['attention_impl'] != 'triton':
-            raise ValueError('invalid attention_impl')
-        if self.config['kv_layout'] not in ('bhsd', 'bshd'):
-            raise ValueError('invalid kv_layout')
         self.tree = DraftTree(1, 1, device) if tree is None else tree
-        rows = batch * self.tree.nodes
-        self.rows = rows
+        self.rows = rows = batch * self.tree.nodes
         def alloc(*shape):
             return torch.empty(shape, device=device, dtype=torch.bfloat16)
-        self.mm = lambda a, b, out: torch.mm(a, b, out=out)
         self.x = alloc(rows, 2560)
         self.norm = alloc(rows, 2560)
         self.branch = alloc(rows, 2560)
@@ -37,10 +32,8 @@ class TreeDecodeBuffers:
         self.product = alloc(rows, 9728)
         self.activation = alloc(rows, 9728)
         splits = (capacity + TUNABLES['attention.BLOCK'] - 1) // TUNABLES['attention.BLOCK']
-        self.partial = self.lse = None
-        if scratch:
-            self.partial = torch.empty((rows, 32, splits, 128), device=device, dtype=torch.float32)
-            self.lse = torch.empty((rows, 32, splits), device=device, dtype=torch.float32)
+        self.partial = torch.empty((rows, 32, splits, 128), device=device, dtype=torch.float32)
+        self.lse = torch.empty((rows, 32, splits), device=device, dtype=torch.float32)
 
     def layer(self, w, k, v, base, cos, sin, carry_in=False, defer_out=False):
         """One decoder layer on fixed buffers.
@@ -55,24 +48,21 @@ class TreeDecodeBuffers:
             norm_out(self.branch, w.input_norm, self.norm, w.eps, self.x, self.x)
         else:
             norm_out(self.x, w.input_norm, self.norm, w.eps)
-        self.mm(self.norm, w.qkv, self.qkv)
+        torch.mm(self.norm, w.qkv, out=self.qkv)
         qk_rope_cache_out(self.qkv, w.q_norm, w.k_norm, cos, sin, base, self.tree,
                           self.q, k, v, self.qk_scratch, self.config['fuse_qk_norm_rope'])
-        self.attend(k, v, base)
-        self.mm(self.attn_flat, w.o, self.branch)
+        attention_out(self.q, k, v, base, self.tree, self.attn, self.partial, self.lse)
+        torch.mm(self.attn_flat, w.o, out=self.branch)
         if self.config['fuse_norm_residual']:
             norm_out(self.branch, w.post_norm, self.norm, w.eps, self.x, self.x)
         else:
             torch.add(self.x, self.branch, out=self.x)
             norm_out(self.x, w.post_norm, self.norm, w.eps)
-        self.mm(self.norm, w.gate_up, self.gate_up)
+        torch.mm(self.norm, w.gate_up, out=self.gate_up)
         silu_mul_out(self.gate_up, self.product, self.activation, self.config['fuse_silu_mul'])
-        self.mm(self.product, w.down, self.branch)
+        torch.mm(self.product, w.down, out=self.branch)
         if not (defer_out and self.config['fuse_norm_residual']):
             torch.add(self.x, self.branch, out=self.x)
-
-    def attend(self, k, v, base):
-        attention_out(self.q, k, v, base, self.tree, self.attn, self.partial, self.lse)
 
 
 def cache_storage(batch, capacity, device, layout, layers=1):

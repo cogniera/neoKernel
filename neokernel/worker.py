@@ -46,18 +46,6 @@ def main():
         print(json.dumps({"child_cpu": diagnostics}), file=sys.stderr, flush=True)
         sys.path.insert(0, sys.argv[1])
         os.chdir(sys.argv[1])
-        if len(sys.argv) > 3 and sys.argv[3] == "validate_rmsnorm":
-            from kernels.rmsnorm import rms_norm
-            torch.manual_seed(1234)
-            with torch.inference_mode():
-                for rows, width in [(1, 128), (32, 128), (1, 2560), (16, 2560), (512, 2560)]:
-                    x = torch.randn(rows, width, device="cuda", dtype=torch.bfloat16)
-                    weight = torch.randn(width, device="cuda", dtype=torch.bfloat16)
-                    reference = (x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + 1e-6)).to(x.dtype) * weight
-                    actual = rms_norm(x, weight, 1e-6)
-                    torch.testing.assert_close(actual, reference, rtol=.016, atol=.016)
-            send({"kind": "validated", "kernel": "rmsnorm"})
-            return
         from engine import Engine
         engine = Engine(sys.argv[2])
         lifetime_peak_mem_bytes = torch.cuda.max_memory_allocated()

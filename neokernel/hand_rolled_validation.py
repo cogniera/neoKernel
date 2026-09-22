@@ -4,22 +4,26 @@ Does not change the judge, guard, gates, engine, or existing Modal entry points.
 Run only with operator approval: py -3.11 -m neokernel.hand_rolled_validation
 """
 
-import io
 import argparse
-from pathlib import Path
+import contextlib
+import io
+import json
 import tempfile
 import time
+import unittest
+from pathlib import Path
 
+from agent.package import package
 from . import modal_app
 from .accounting import SpendLedger, estimate_usd, GPU_TIMEOUT_S, GPU_IDLE_S
+from .cli import Remote, report
 from .guard import lint_source, check
+from .schema import PUBLIC
 from .storage import ROOT, RESULTS, write_json
 
 
 @modal_app.app.function(**modal_app.L4_REMOTE)
 def validate_remote(sources: dict[str, str]) -> dict:
-    import contextlib
-    import unittest
     started = time.perf_counter()
     modal_app.verify_runtime()
     modal_app.cpu_diagnostics()
@@ -68,7 +72,6 @@ def main():
             sources[name] = (ROOT / name).read_text(encoding='utf-8')
     ledger = SpendLedger()
     task_path = RESULTS / 'hand_rolled_budget.json'
-    import json
     if task_path.exists():
         task = json.loads(task_path.read_text())
     else:
@@ -79,7 +82,7 @@ def main():
     if args.integration:
         reservation *= 2
     if spent + reservation > task['limit_usd']:
-        raise RuntimeError(f'Task budget: ${spent:.4f} spent; ${reservation:.4f} reservation exceeds $4')
+        raise RuntimeError(f"Task budget: ${spent:.4f} spent; ${reservation:.4f} reservation exceeds ${task['limit_usd']:.2f}")
     ledger.reserve('L4')
     result = None
     started = time.perf_counter()
@@ -92,13 +95,10 @@ def main():
         ledger.record('L4', started, result['gpu_seconds'] if result else None,
                       'hand_rolled_unit_tests', result['passed'] if result else False)
     spent = ledger.read()['estimated_usd'] - task['start_estimated_usd']
-    print(f'Hand-rolled task estimated spend: ${spent:.4f} / $4.00')
+    print(f"Hand-rolled task estimated spend: ${spent:.4f} / ${task['limit_usd']:.2f}")
     if spent >= task['limit_usd']:
         raise RuntimeError('Task budget reached; stop')
     if result['passed'] and args.integration:
-        from agent.package import package
-        from .cli import Remote, report
-        from .schema import PUBLIC
         if spent + estimate_usd('L4', GPU_TIMEOUT_S + 60 + GPU_IDLE_S) > task['limit_usd']:
             raise RuntimeError('Task budget cannot reserve public correctness check')
         with Remote() as remote:
@@ -106,7 +106,7 @@ def main():
         write_json(RESULTS / 'hand_rolled_public_check.json', checked)
         report(checked, correctness_only=True)
         spent = ledger.read()['estimated_usd'] - task['start_estimated_usd']
-        print(f'Hand-rolled task estimated spend: ${spent:.4f} / $4.00')
+        print(f"Hand-rolled task estimated spend: ${spent:.4f} / ${task['limit_usd']:.2f}")
         if spent >= task['limit_usd']:
             raise RuntimeError('Task budget reached; stop')
         return 0 if checked['eligible'] else 1

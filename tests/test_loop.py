@@ -263,7 +263,7 @@ class LoopTests(unittest.TestCase):
                 modal_app.run_unit_suite({**sources, 'tests/test_loop.py': ''}, Path(tmp) / 'c')
 
     def test_sweep_threshold_and_numeric_coordinates(self):
-        from neokernel import sweep, storage
+        from neokernel import sweep
         source = 'TUNABLES = {"norm.BLOCK": 4096, "attention.BLOCK": 128}\n'
         choices = sweep.numeric_candidates(source, 10)
         self.assertTrue(choices)
@@ -274,7 +274,7 @@ class LoopTests(unittest.TestCase):
                 restore(root/'engine/kernels', {'__init__.py': source.encode()})
                 git(root, 'add', 'engine'); credential_scan(root); git(root, 'commit', '-m', 'tunables')
                 args = argparse.Namespace(workloads='public-0', steps=1, random=False, seed=0, wire_rmsnorm=False, resume=False)
-                with patch.object(sweep, 'ROOT', root), patch.object(storage, 'RESULTS', root/'results'):
+                with patch.object(sweep, 'ROOT', root), patch.object(sweep, 'RESULTS', root/'results'):
                     self.assertEqual(sweep.run_sweep(args, FakeRemote(score)), 0)
                 self.assertEqual(read_log(root/'results')[-1]['kept'], score == 102)
 

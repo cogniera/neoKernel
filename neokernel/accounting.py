@@ -16,6 +16,7 @@ GPU_IDLE_S = 60
 CPU_CORES = 8.0
 MEMORY_GIB = 32
 STOP_USD = 3.0
+NIGHT_LIMIT_USD = 8.0
 
 
 class SpendLimit(ValueError):
@@ -30,7 +31,7 @@ def start_night(directory=RESULTS):
     path = directory / 'night_budget.json'
     if not path.exists():
         ledger = SpendLedger(directory)
-        write_json(path, {'start_estimated_usd': ledger.read()['estimated_usd'], 'limit_usd': 8.0,
+        write_json(path, {'start_estimated_usd': ledger.read()['estimated_usd'], 'limit_usd': NIGHT_LIMIT_USD,
                           'start_log_id': max((r['id'] for r in read_log(directory)), default=0),
                           'ts': timestamp()})
     return json.loads(path.read_text())
@@ -44,12 +45,13 @@ class SpendLedger:
     def __init__(self, directory: Path = RESULTS):
         self.directory = directory
         self.path = directory / "spend.json"
+        self.reservation_id = None
 
     def ceiling(self):
         night = self.directory / 'night_budget.json'
         if night.exists():
             task = json.loads(night.read_text())
-            return float(task['start_estimated_usd']) + min(8.0, float(task['limit_usd']))
+            return float(task['start_estimated_usd']) + min(NIGHT_LIMIT_USD, float(task['limit_usd']))
         task_path = self.directory / "hand_rolled_budget.json"
         if task_path.exists():
             task = json.loads(task_path.read_text())
@@ -89,8 +91,7 @@ class SpendLedger:
 
     def settle(self, amount, **details):
         result = self.read()
-        reservation_id = getattr(self, 'reservation_id', None)
-        row = next((r for r in result['calls'] if r.get('id') == reservation_id), None)
+        row = next((r for r in result['calls'] if r.get('id') == self.reservation_id), None)
         if row is None:
             raise RuntimeError('Missing spend reservation')
         row.update(estimated_usd=amount, status='settled', **details)
@@ -105,11 +106,10 @@ class SpendLedger:
         billed_s = max(wall_s, reported_s or 0) + idle_s
         if reported_s is None:
             billed_s = max(billed_s, timeout_s + 60 + idle_s)
-        if not getattr(self, 'reservation_id', None):
+        if not self.reservation_id:
             self.reserve(tier)
         result = self.settle(estimate_usd(tier, billed_s), operation=operation, tier=tier,
                              reported_gpu_s=reported_s, estimated_allocation_s=billed_s, passed=passed)
-        result["estimated_usd"] = result["setup_estimated_usd"] + sum(c["estimated_usd"] for c in result["calls"])
         result["rates_source"] = "https://modal.com/pricing"
         write_json(self.path, result)
         print(f"Spend: {tier} estimated allocation {billed_s:.2f}s; cumulative estimated ${result['estimated_usd']:.4f}")

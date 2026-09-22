@@ -104,9 +104,10 @@ class RunResult:
 
 
 PROPOSAL_FIELDS = ("item", "hypothesis", "expected_effect", "files", "risk", "reasoning")
-PROPOSAL_SCHEMA = {"type": "object", "properties": {k: {"type": "string"} for k in PROPOSAL_FIELDS},
+PROPOSAL_SCHEMA = {"type": "object",
+                   "properties": {k: {"type": "object", "additionalProperties": {"type": "string"}} if k == "files"
+                                  else {"type": "string"} for k in PROPOSAL_FIELDS},
                    "required": list(PROPOSAL_FIELDS), "additionalProperties": False}
-PROPOSAL_SCHEMA['properties']['files'] = {'type': 'object', 'additionalProperties': {'type': 'string'}}
 
 
 @dataclass

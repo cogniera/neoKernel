@@ -1,15 +1,15 @@
 """LLM-free numeric search, staged outside the live engine until a winner is known."""
 
 import ast
-import itertools
 import random
 import tempfile
 from pathlib import Path
 
-from agent.package import package
-from .guard import check
+from .accounting import SpendLimit, record_stop
+from .loop import measured_baseline, run_experiment, generated_diff
 from .schema import select_workloads
-from .storage import ROOT, append_log, restore, snapshot
+from .storage import ROOT, RESULTS, restore, snapshot
+from .transaction import Transaction, crash
 
 
 def tunables(source: str) -> dict[str, list[int | float]]:
@@ -119,12 +119,8 @@ def numeric_candidates(source, limit, randomized=False, seed=0):
 
 
 def run_sweep(args, remote) -> int:
-    from .loop import measured_baseline, run_experiment, generated_diff
-    from .transaction import Transaction, crash
-    from .accounting import SpendLimit, record_stop
-    from .storage import RESULTS
     transaction = Transaction(ROOT, RESULTS)
-    transaction.startup(getattr(args, 'resume', False))
+    transaction.startup(args.resume)
     live = ROOT / 'engine'
     workloads = select_workloads(args.workloads)
     try:

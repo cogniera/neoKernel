@@ -6,7 +6,7 @@ import threading
 from contextlib import contextmanager
 
 from .accounting import SpendLedger, start_night
-from .storage import ROOT, RESULTS, read_log, timestamp, write_json, git_sha
+from .storage import RESULTS, read_log, timestamp, write_json, git_sha
 
 
 @contextmanager
@@ -64,7 +64,7 @@ def morning(directory=RESULTS, outcome=None):
             f'Kept ids and geomean deltas: {[(r["id"], r["geomean_tps"], r["delta_pct"]) for r in rows if r["kept"]]}\n\n'
             f'best.json:\n```json\n{json.dumps(best, indent=2)}\n```\n\n'
             f'Night spend by tier (estimated/reserved USD): {json.dumps(totals)}\n\n'
-            f'Total night estimated/reserved spend: ${ledger["estimated_usd"] - night["start_estimated_usd"]:.4f} / $8.00. '
+            f'Total night estimated/reserved spend: ${ledger["estimated_usd"] - night["start_estimated_usd"]:.4f} / ${night["limit_usd"]:.2f}. '
             'Provider invoices may differ; unresolved reservations remain charged.\n\n'
             f'CRASH.txt:\n```text\n{read("CRASH.txt")}\n```\n\n'
             f'Power restore:\n{read("POWERCFG_RESTORE.md")}\n\n'

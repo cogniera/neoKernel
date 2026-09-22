@@ -1,5 +1,3 @@
-import argparse
-import hashlib
 import json
 import tempfile
 import unittest
@@ -9,7 +7,7 @@ from unittest.mock import Mock
 from pathlib import Path
 from unittest.mock import patch
 
-from neokernel.guard import GuardError, check
+from neokernel.guard import check
 from neokernel.loop import apply_proposal, validate_files, generated_diff, history_summary, validate_proposal, retry_call
 from neokernel.profile import aggregate_events
 from neokernel.schema import Proposal, select_workloads

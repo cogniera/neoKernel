@@ -12,17 +12,20 @@ import torch
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoModelForCausalLM
-from kernels import CONFIG, TUNABLES
+from kernels import CONFIG
+from kernels.prefill import norm, add_norm, qkv_cache, packed_silu_mul
+from kernels.rmsnorm import norm_out
+from kernels.speculative import draft_out, accept_out, compact_out, warm_out
+from kernels.tree import DraftTree
+from kernels.tree_decode import TreeDecodeBuffers, cache_storage
+from kernels.weights import LayerWeights
 
 
-# Configuration is fixed for the lifetime of an imported engine.
 DECODE_CONFIG = dict(CONFIG)
 
 
 class PrefixCache:
     """Per-layer [B,8,capacity,128] views of one [L,B,8,capacity,128] allocation per K and V."""
-
-    prefill_length = 0
 
     def __init__(self, key_storage, value_storage):
         self.key_storage, self.value_storage = key_storage, value_storage
@@ -33,8 +36,6 @@ class PrefixCache:
 @torch.inference_mode()
 def qwen_forward(model, input_ids, cache, packed_layers, keep_rows=1):
     """Prefill; returns the final-normalized hidden rows the caller asked to keep (last ones)."""
-    from kernels.prefill import norm, add_norm, qkv_cache, packed_silu_mul
-
     base = model.model
     batch, length = input_ids.shape
     x = base.embed_tokens(input_ids)
@@ -92,23 +93,12 @@ def schedule_steps(batch, output_length):
 
 class Engine:
     def __init__(self, model_path):
-        from kernels.weights import LayerWeights
-        from kernels.rmsnorm import norm_out
-        from kernels.tree import DraftTree
-        from kernels.tree_decode import TreeDecodeBuffers, cache_storage
-        from kernels.speculative import draft_out, accept_out, compact_out, warm_out
-        self.norm_out = norm_out
-        self.tree_type = DraftTree
-        self.tree_buffer_type = TreeDecodeBuffers
-        self.cache_storage = cache_storage
-        self.draft_out, self.accept_out, self.compact_out, self.warm_out = draft_out, accept_out, compact_out, warm_out
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path, torch_dtype=torch.bfloat16, attn_implementation="sdpa",
             local_files_only=True,
         ).eval().to("cuda:0")
-        self.model.requires_grad_(False)
         with torch.inference_mode():
             self.layers = [LayerWeights(layer) for layer in self.model.model.layers]
         self.embedding = self.model.model.embed_tokens.weight
@@ -129,13 +119,13 @@ class Engine:
         self.prefill_graph = None
         self.shape = (batch, prompt_length, output_length)
         vocab = self.model.config.vocab_size
-        self.tree = self.tree_type(draft_nodes(batch) if output_length > 1 else 1, self.ranks, "cuda:0")
+        self.tree = DraftTree(draft_nodes(batch) if output_length > 1 else 1, self.ranks, "cuda:0")
         nodes, depth = self.tree.nodes, self.tree.max_depth
         self.steps = schedule_steps(batch, output_length)
         capacity = prompt_length + output_length + nodes
         layers = len(self.layers)
-        self.key_storage = self.cache_storage(batch, capacity, "cuda:0", DECODE_CONFIG["kv_layout"], layers)
-        self.value_storage = self.cache_storage(batch, capacity, "cuda:0", DECODE_CONFIG["kv_layout"], layers)
+        self.key_storage = cache_storage(batch, capacity, "cuda:0", DECODE_CONFIG["kv_layout"], layers)
+        self.value_storage = cache_storage(batch, capacity, "cuda:0", DECODE_CONFIG["kv_layout"], layers)
         self.cache = PrefixCache(self.key_storage, self.value_storage)
         self.prompt_ids = torch.empty((batch, prompt_length), device="cuda:0", dtype=torch.int64)
         self.host_prompt = torch.empty((batch, prompt_length), dtype=torch.int64, pin_memory=True)
@@ -149,16 +139,6 @@ class Engine:
             self.warm_logits = torch.empty((self.warm_chunk, vocab), device="cuda:0", dtype=torch.bfloat16)
             self.warm_values = torch.empty((self.warm_chunk, self.ranks), device="cuda:0", dtype=torch.bfloat16)
             self.warm_indices = torch.empty((total, self.ranks), device="cuda:0", dtype=torch.int64)
-        self.prepare_tree(batch, prompt_length, output_length, capacity, vocab)
-        positions = torch.arange(capacity, device="cuda:0").unsqueeze(0)
-        cos, sin = self.model.model.rotary_emb(self.buffers.x, positions)
-        self.cos = cos[0].contiguous()
-        self.sin = sin[0].contiguous()
-
-    # ---- draft-tree decode ------------------------------------------------------------
-
-    def prepare_tree(self, batch, prompt_length, output_length, capacity, vocab):
-        nodes, depth = self.tree.nodes, self.tree.max_depth
         self.context = torch.zeros((batch, prompt_length + output_length + depth + 1),
                                    device="cuda:0", dtype=torch.int64)
         self.count = torch.zeros((batch,), device="cuda:0", dtype=torch.int64)
@@ -173,17 +153,21 @@ class Engine:
         self.host_first = torch.empty((batch, 1), dtype=torch.int64, pin_memory=True)
         self.host_packets = [torch.empty(self.packet.shape, dtype=torch.int64, pin_memory=True) for _ in range(2)]
         self.copy_streams = [torch.cuda.Stream() for _ in range(3)]
-        self.buffers = self.tree_buffer_type(batch, capacity, "cuda:0", DECODE_CONFIG, self.tree)
+        self.buffers = TreeDecodeBuffers(batch, capacity, "cuda:0", DECODE_CONFIG, self.tree)
         rows = self.buffers.rows
         self.logits = torch.empty((rows, vocab), device="cuda:0", dtype=torch.bfloat16)
         self.top_values = torch.empty((rows, self.ranks), device="cuda:0", dtype=torch.bfloat16)
         self.top_indices = torch.empty((rows, self.ranks), device="cuda:0", dtype=torch.int64)
+        positions = torch.arange(capacity, device="cuda:0").unsqueeze(0)
+        cos, sin = self.model.model.rotary_emb(self.buffers.x, positions)
+        self.cos = cos[0].contiguous()
+        self.sin = sin[0].contiguous()
 
     def tree_decode(self):
         """One verification step: draft, target forward over all nodes, accept, compact."""
-        batch, prompt_length, output_length = self.shape
-        self.draft_out(self.context, self.count, self.table, self.tree, self.tokens, self.base,
-                       DECODE_CONFIG["ngram"])
+        prompt_length, output_length = self.shape[1:]
+        draft_out(self.context, self.count, self.table, self.tree, self.tokens, self.base,
+                  DECODE_CONFIG["ngram"])
         torch.index_select(self.embedding, 0, self.tokens.view(-1), out=self.buffers.x)
         fuse = DECODE_CONFIG["fuse_norm_residual"]
         for i, weights in enumerate(self.layers):
@@ -192,18 +176,18 @@ class Engine:
         if fuse:
             # The last down projection is still pending in branch; the final
             # norm consumes it as its residual and stores the rounded sum in x.
-            self.norm_out(self.buffers.branch, self.final_norm, self.buffers.norm,
-                          self.final_eps, self.buffers.x, self.buffers.x)
+            norm_out(self.buffers.branch, self.final_norm, self.buffers.norm,
+                     self.final_eps, self.buffers.x, self.buffers.x)
         else:
-            self.norm_out(self.buffers.x, self.final_norm, self.buffers.norm, self.final_eps)
+            norm_out(self.buffers.x, self.final_norm, self.buffers.norm, self.final_eps)
         torch.mm(self.buffers.norm, self.lm_head, out=self.logits)
         # Rank 0 is the greedy token; on an exact BF16 tie any tied token is greedy.
         torch.topk(self.logits, self.ranks, dim=-1, out=(self.top_values, self.top_indices))
-        self.accept_out(self.tokens, self.top_indices, self.tree, self.context, self.count,
-                        self.table, self.step, self.packet, self.path, self.accepted,
-                        prompt_length, output_length, self.steps)
-        self.compact_out(self.key_storage, self.value_storage, self.base, self.path,
-                         self.accepted, self.tree)
+        accept_out(self.tokens, self.top_indices, self.tree, self.context, self.count,
+                   self.table, self.step, self.packet, self.path, self.accepted,
+                   prompt_length, output_length, self.steps)
+        compact_out(self.key_storage, self.value_storage, self.base, self.path,
+                    self.accepted, self.tree)
         self.step.add_(1)
 
     def capture_tree(self):
@@ -220,7 +204,7 @@ class Engine:
 
     def reset_tree(self):
         """Commit prompt and first token; seed the draft table with prompt bigrams, then warm it."""
-        batch, prompt_length, output_length = self.shape
+        prompt_length = self.shape[1]
         self.context[:, :prompt_length].copy_(self.prompt_ids)
         self.context[:, prompt_length:prompt_length + 1].copy_(self.token_ids)
         self.count.fill_(prompt_length + 1)
@@ -230,7 +214,7 @@ class Engine:
             self.table[:, 0].scatter_(0, self.prompt_ids[:, :-1].reshape(-1),
                                       self.prompt_ids[:, 1:].reshape(-1).to(torch.int32))
         if self.warm_window:
-            self.warm_out(self.prompt_ids[:, prompt_length - self.warm_window:], self.warm_indices, self.table)
+            warm_out(self.prompt_ids[:, prompt_length - self.warm_window:], self.warm_indices, self.table)
 
     def fetch(self, slot, source, target):
         """Queue an async copy of a device tensor; the next step waits for it on the device."""
@@ -245,7 +229,6 @@ class Engine:
         self.fetch(slot, self.packet, self.host_packets[slot])
 
     def generate_tree(self, max_new_tokens):
-        batch, prompt_length, output_length = self.shape
         if self.graph is None:
             # Warmup runs real steps and advances the state: rebuild it from the prefill.
             self.reset_tree()
@@ -281,10 +264,8 @@ class Engine:
             inflight = 1 - inflight if queue_next else None
         self.rounds = steps
 
-    # ---- prefill and the entry point --------------------------------------------------
-
     def prefill(self):
-        batch, prompt_length, output_length = self.shape
+        batch = self.shape[0]
         rows = max(1, self.warm_window)
         normalized = qwen_forward(self.model, self.prompt_ids, self.cache, self.layers, rows)
         torch.mm(normalized[:, -1, :], self.lm_head, out=self.first_logits)
@@ -312,8 +293,6 @@ class Engine:
         torch.cuda.current_stream().wait_stream(stream)
 
     def generate(self, input_ids, max_new_tokens):
-        if max_new_tokens <= 0:
-            return
         batch, prompt_length = len(input_ids), len(input_ids[0])
         with torch.inference_mode():
             if self.shape != (batch, prompt_length, max_new_tokens):

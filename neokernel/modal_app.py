@@ -3,16 +3,23 @@
 import importlib.metadata
 import json
 import os
+import queue
+import re
+import secrets
+import subprocess
+import sys
 import tempfile
+import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import modal
 
 from .accounting import CPU_CORES, GPU_IDLE_S, GPU_TIMEOUT_S, MEMORY_GIB
-from .guard import extract
-from .judge import Child, evaluate, measure
-from .schema import Correctness, Workload, WorkloadResult
+from .guard import check, extract
+from .judge import child_launch_options, evaluate, measure
+from .profile import profile_engine
+from .schema import Workload
 from .mounts import mount_judge_source
 
 PINS = {"torch": "2.5.1", "triton": "3.1.0", "transformers": "4.51.3",
@@ -32,7 +39,6 @@ _started = time.perf_counter()
 
 
 def verify_runtime():
-    import sys
     import torch
     if sys.version_info[:2] != (3, 11) or torch.version.cuda != "12.4":
         raise RuntimeError("requires Python 3.11 and CUDA 12.4")
@@ -58,11 +64,7 @@ def download_weights():
 @app.function(image=image, cpu=1, memory=2048, timeout=120, scaledown_window=2, include_source=False)
 def runtime_probe() -> dict:
     """Verify pinned packages and Linux subprocess startup without allocating a GPU."""
-    import json
-    import subprocess
-    import sys
     import torch
-    from .judge import child_launch_options
     verify_runtime()
     versions = {name: importlib.metadata.version(name) for name in PINS}
     child = subprocess.run([sys.executable, "-I", "-u", "-c", "import os; print(os.name)"],
@@ -159,7 +161,6 @@ UNIT_TEST_TIMEOUT_S = GPU_TIMEOUT_S - 120
 
 def unit_source_ok(name: str) -> bool:
     """Engine source in the proposal write scope, or the harness's own test files."""
-    from pathlib import PurePosixPath
     parts = PurePosixPath(name).parts
     if name != PurePosixPath(*parts).as_posix() or any(p in {'', '.', '..'} for p in parts) or not name.endswith('.py'):
         return False
@@ -170,10 +171,6 @@ def unit_source_ok(name: str) -> bool:
 
 def run_unit_suite(sources: dict[str, str], root: Path) -> dict:
     """Kernel and handoff tests in a fresh interpreter; a warm container never reuses cached modules."""
-    import re
-    import subprocess
-    import sys
-    from .guard import check
     for name, source in sources.items():
         if not unit_source_ok(name):
             raise ValueError(f'unexpected unit test source: {name}')
@@ -222,52 +219,8 @@ def judge_remote(engine_tar: bytes, workloads: list, samples: int = 3, refresh_n
     return result
 
 
-@app.function(**REMOTE)
-def judge_many(engine_tars: list[bytes], workloads: list, samples: int = 2,
-               refresh_native: bool = False, native: dict | None = None,
-               check_workloads: list | None = None, validate_rmsnorm: bool = False) -> list[dict]:
-    results = []
-    for payload in engine_tars:
-        validation_s = 0.0
-        if validate_rmsnorm:
-            started = time.perf_counter()
-            try:
-                with tempfile.TemporaryDirectory() as tmp:
-                    root = extract(payload, Path(tmp))
-                    child = Child(root, MODEL_PATH, mode="validate_rmsnorm")
-                    try:
-                        _, message = child.receive(time.perf_counter()+300)
-                        if message["kind"] != "validated":
-                            raise RuntimeError("missing RMSNorm validation result")
-                    finally:
-                        child.close()
-            except (RuntimeError, TimeoutError) as exc:
-                from dataclasses import asdict
-                validation_s = time.perf_counter() - started
-                results.append({"eligible": False, "geomean_tps": None, "gpu_seconds": validation_s,
-                                "native": native or {}, "workloads": [asdict(WorkloadResult(
-                                    **w, correctness=Correctness(False), gates={"kernel_comparison": False},
-                                    failure_code="incorrect_output", note=f"RMSNorm unit comparison: {exc}")) for w in workloads]})
-                print(f"RMSNorm validation failed; GPU seconds={validation_s:.2f}", flush=True)
-                continue
-            validation_s = time.perf_counter() - started
-        check_result = run_one(payload, check_workloads or workloads[:1], 1, False, native, True)
-        native = check_result["native"]
-        if check_result["eligible"]:
-            result = run_one(payload, workloads, samples, refresh_native, native)
-            result["gpu_seconds"] += check_result["gpu_seconds"]
-        else:
-            result = check_result
-        result["gpu_seconds"] += validation_s
-        results.append(result)
-        native = result["native"]
-        refresh_native = False
-    return results
-
-
 @app.function(**L4_REMOTE)
 def profile_remote(engine_tar: bytes, workload: dict) -> dict:
-    from .profile import profile_engine
     started = time.perf_counter()
     model, tokenizer = reference()
     with tempfile.TemporaryDirectory() as tmp:
@@ -281,7 +234,6 @@ def profile_remote(engine_tar: bytes, workload: dict) -> dict:
 
 @app.function(**REMOTE)
 def profile_h100_remote(engine_tar: bytes, workload: dict) -> dict:
-    from .profile import profile_engine
     started = time.perf_counter()
     cpu_diagnostics()
     model, tokenizer = reference()
@@ -296,10 +248,6 @@ def profile_h100_remote(engine_tar: bytes, workload: dict) -> dict:
 @app.function(**REMOTE)
 def race_remote(engine_tars: list[bytes], workload: dict):
     """Stream sequential, same-prompt runs; avoid two candidates contending on H100."""
-    import queue
-    import secrets
-    import threading
-    from .profile import profile_engine
     model, tokenizer = reference()
     w = Workload(**workload)
     seed = secrets.randbits(62)

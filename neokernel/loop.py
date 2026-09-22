@@ -14,7 +14,7 @@ from pathlib import Path
 from agent.package import package
 from .guard import GuardError, check
 from .schema import PUBLIC, Proposal, PROPOSAL_SCHEMA, select_workloads
-from .storage import ROOT, RESULTS, append_log, read_log, restore, snapshot, write_json
+from .storage import ROOT, RESULTS, read_log, restore, snapshot, write_json
 from .transaction import Transaction, crash
 from .accounting import SpendLedger, SpendLimit, record_stop
 from .judge import keep_decision
@@ -372,7 +372,7 @@ def measured_baseline(remote, engine_dir, workloads):
 
 def run_loop(args, remote, proposer=None) -> int:
     transaction = Transaction(ROOT, RESULTS)
-    transaction.startup(getattr(args, 'resume', False))
+    transaction.startup(args.resume)
     items = args.items.split(',') if args.items else PLAYBOOK
     if not items or any(i not in PLAYBOOK for i in items):
         raise ValueError('unknown playbook item')
@@ -383,7 +383,7 @@ def run_loop(args, remote, proposer=None) -> int:
         baseline = measured_baseline(remote, engine_dir, workloads)
         night_path = RESULTS / 'night_budget.json'
         start_id = json.loads(night_path.read_text())['start_log_id'] if night_path.exists() else 0
-        done = sum(r.get('proposer') == 'agent' and r['id'] > start_id for r in read_log(RESULTS)) if getattr(args, 'resume', False) else 0
+        done = sum(r.get('proposer') == 'agent' and r['id'] > start_id for r in read_log(RESULTS)) if args.resume else 0
         for step in range(done, args.steps):
             records = read_log(RESULTS)
             # Use available profile data; new GPU work goes through judge calls only.

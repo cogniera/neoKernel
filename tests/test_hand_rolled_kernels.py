@@ -14,17 +14,14 @@ import unittest
 
 try:
     import torch
-    GPU = torch.cuda.is_available()
+    TORCH, GPU = True, torch.cuda.is_available()
 except ImportError:
-    GPU = False
+    TORCH = GPU = False
 
 
+@unittest.skipUnless(TORCH, 'PyTorch required')
 class GroupedSDPALayoutTests(unittest.TestCase):
     def test_copy_preserves_head_order_for_noncontiguous_sdpa_output(self):
-        try:
-            import torch
-        except ImportError:
-            self.skipTest('PyTorch required')
         # SDPA may return B,H,Q,D backed by B,Q,H,D. Flattening H,Q with
         # view is invalid; copy into a matching grouped destination instead.
         expected = torch.arange(2*8*4*128).reshape(2, 8, 4, 128)
@@ -35,12 +32,9 @@ class GroupedSDPALayoutTests(unittest.TestCase):
         torch.testing.assert_close(storage, expected.reshape(2, 32, 128))
 
 
+@unittest.skipUnless(TORCH, 'PyTorch required')
 class DraftTreeTests(unittest.TestCase):
     def test_tree_orders_parents_first_and_depth_bounds_index(self):
-        try:
-            import torch
-        except ImportError:
-            self.skipTest('PyTorch required')
         root = Path(__file__).resolve().parents[1]
         sys.path.insert(0, str(root / 'engine'))
         from kernels.tree import DraftTree
@@ -107,7 +101,7 @@ class HandRolledKernelTests(unittest.TestCase):
 
     @torch.inference_mode() if GPU else (lambda f: f)
     def test_norm_and_residual(self):
-        from kernels.elementwise import norm_out
+        from kernels.rmsnorm import norm_out
         from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
         native = Qwen3RMSNorm(2560, eps=1e-6).cuda().bfloat16()
         native.weight.copy_(self.rand(2560))
@@ -346,8 +340,7 @@ class HandRolledKernelTests(unittest.TestCase):
                          position_embeddings=(self.cos[None, pos:pos+1], self.sin[None, pos:pos+1]))[0]
             for nr, qk, sm, layout in itertools.product((False, True), (False, True), (False, True),
                                                         ('bhsd', 'bshd')):
-                config = dict(fuse_norm_residual=nr, fuse_qk_norm_rope=qk, fuse_silu_mul=sm,
-                              attention_impl='triton', kv_layout=layout)
+                config = dict(fuse_norm_residual=nr, fuse_qk_norm_rope=qk, fuse_silu_mul=sm, kv_layout=layout)
                 buf = DecodeBuffers(batch, capacity, 'cuda', config, tree)
                 k, v = [cache_storage(batch, capacity, 'cuda', layout)[0] for _ in range(2)]
                 k[:, :, :pos].copy_(prefix_k); v[:, :, :pos].copy_(prefix_v)

@@ -1,6 +1,7 @@
 """Durable, recoverable experiment transactions. Never pushes."""
 
 import json
+import os
 import shutil
 import subprocess
 import traceback
@@ -38,7 +39,6 @@ def put_row(directory, row):
         for record in [*records, row]:
             stream.write(json.dumps(record, allow_nan=False) + '\n')
         stream.flush()
-        import os
         os.fsync(stream.fileno())
     tmp.replace(path)
 
@@ -46,7 +46,6 @@ def put_row(directory, row):
 def crash(directory):
     directory.mkdir(parents=True, exist_ok=True)
     text = traceback.format_exc()
-    import os
     key = os.environ.get('BASETEN_API_KEY')
     if key:
         text = text.replace(key, '[REDACTED]')
@@ -63,7 +62,6 @@ class Transaction:
         write_json(self.path, self.state)
 
     def startup(self, resume=False):
-        branch = git(self.root, 'branch', '--show-current')
         leftovers = git(self.root, 'branch', '--list', 'exp/*').splitlines()
         if self.state or leftovers:
             if not resume:

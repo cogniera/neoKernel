@@ -388,7 +388,6 @@ def native_record(w: Workload, measurement, model, transport: str) -> dict:
 
 def keep_decision(result: dict, baseline: dict) -> tuple[bool, float | None]:
     """Only the judge grants keep; compare identical measured workload sets."""
-    import math
     allowed = {'incorrect_output', 'candidate_error', 'timeout', 'load_budget',
                'latency_limit', 'memory_limit', 'unstable_timing', 'physics_violation'}
     for run in (baseline, result):
