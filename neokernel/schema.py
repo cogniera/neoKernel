@@ -40,6 +40,10 @@ class Correctness:
     first_bad_position: list[int] | None = None
     margin: float | None = None
     near_tie_count: int = 0
+    # Worst margin seen anywhere, recorded whether or not the run passed. Without
+    # it a passing run reports no headroom at all, so there is no way to tell an
+    # engine sitting at 0.25 from one sitting at 1.97 until one finally fails.
+    worst_margin: float | None = None
 
 
 @dataclass

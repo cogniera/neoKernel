@@ -11,7 +11,7 @@ from neokernel.guard import check
 from neokernel.loop import apply_proposal, validate_files, generated_diff, history_summary, validate_proposal, retry_call
 from neokernel.profile import aggregate_events
 from neokernel.schema import Proposal, select_workloads
-from neokernel.judge import MARGIN, NativeReplayError, keep_decision
+from neokernel.judge import MARGIN, NATIVE_MARGIN, NativeReplayError, keep_decision
 from neokernel.schema import Correctness
 from neokernel.storage import (Budget, append_log, failed_gates, read_log, restore, seed_native,
                                snapshot)
@@ -79,7 +79,9 @@ class NativeOracleTests(unittest.TestCase):
         error = NativeReplayError("public-2", correctness)
         self.assertEqual(error.correctness.margin, 2.0625)
         self.assertIn("public-2", str(error))
-        self.assertGreater(error.correctness.margin, MARGIN, "only a miss above the budget should raise")
+        self.assertGreater(error.correctness.margin, NATIVE_MARGIN,
+                           "only a miss above the calibrated native noise floor should raise")
+        self.assertLess(NATIVE_MARGIN, MARGIN, "the oracle is held tighter than the candidate gate")
 
 
 class WorkflowTests(unittest.TestCase):

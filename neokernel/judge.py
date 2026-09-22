@@ -30,9 +30,26 @@ OFFICIAL = {
 }
 
 
-# The judge's tie budget, calibrated on native against itself. One name so the
-# gate, the native-reference check and their messages cannot drift apart.
+# The candidate's tie budget. Fixed by the engine contract, not ours to move:
+# raising it would pass engines the external evaluator fails, and lowering it
+# would reject engines it accepts.
 MARGIN = 2.0
+
+# The budget for our own native reference replayed against itself, which is a
+# measurement-floor check and not a verdict on anything. It used to reuse
+# MARGIN, so the rig could sit four times outside its own noise floor and only
+# complain when it happened to cross the candidate's gate; that is how a native
+# miss at 2.0625 first surfaced, as an abort that read like an engine fault.
+#
+# Calibrated 2026-09-22 on H100 over two seeded five-sample runs of all six
+# workloads, twelve workload observations: native's worst self-replay margin was
+# {0.0, 0.03125, 0.125, 0.25, 0.5}, max 0.5. The contract documents this noise as
+# up to 0.75 logits, so 0.75 keeps 1.5x headroom over the worst observation while
+# still catching a rig that has left the regime the 2.0 gate was calibrated in.
+# Exceeding it means correctness verdicts from that run are not trustworthy, so
+# the workload is reported as harness_error and retried, never charged to the
+# candidate. Re-derive it from the worst_margin fields in results/native_*.json.
+NATIVE_MARGIN = 0.75
 
 
 class CandidateError(RuntimeError):
@@ -60,14 +77,17 @@ def check_logits(logits, emitted, margin_limit: float = MARGIN) -> Correctness:
     finite = torch.isfinite(logits).all(dim=-1)
     bad = (margins > margin_limit) | ~finite
     near = int(((argmax != chosen) & ~bad).sum().item())
+    peak = float(margins[finite].max()) if bool(finite.any()) else None
+    worst = peak if peak is not None and math.isfinite(peak) else None
     if bad.any():
         b, n = bad.nonzero()[0].tolist()
         value = float(margins[b, n])
-        return Correctness(False, [b, n], value if math.isfinite(value) else None, near)
-    return Correctness(near_tie_count=near)
+        return Correctness(False, [b, n], value if math.isfinite(value) else None, near, worst)
+    return Correctness(near_tie_count=near, worst_margin=worst)
 
 
-def replay(model, prompt: list[list[int]], steps: list[list[int]]) -> Correctness:
+def replay(model, prompt: list[list[int]], steps: list[list[int]],
+           margin_limit: float = MARGIN) -> Correctness:
     """Replay each sequence on its emitted prefix after the candidate has exited."""
     import torch
     device = next(model.parameters()).device
@@ -77,8 +97,9 @@ def replay(model, prompt: list[list[int]], steps: list[list[int]]) -> Correctnes
             emitted = [step[b] for step in steps]
             ids = torch.tensor([row + emitted], dtype=torch.long, device=device)
             logits = model(input_ids=ids, use_cache=False).logits[:, len(row) - 1:len(row) + len(emitted) - 1]
-            current = check_logits(logits, [emitted])
+            current = check_logits(logits, [emitted], margin_limit)
             result.near_tie_count += current.near_tie_count
+            result.worst_margin = max(result.worst_margin or 0.0, current.worst_margin or 0.0)
             if not current.passed and result.passed:
                 result.passed = False
                 result.first_bad_position = [b, current.first_bad_position[1]]
@@ -349,11 +370,12 @@ def declares_speculative(engine_dir: Path) -> bool:
                and isinstance(n.value, ast.Constant) and n.value.value is True for n in tree.body)
 
 
-def replay_samples(model, records: list[Sample]) -> Correctness:
+def replay_samples(model, records: list[Sample], margin_limit: float = MARGIN) -> Correctness:
     result = Correctness()
     for sample_index, sample in enumerate(records):
-        tested = replay(model, sample.prompt, sample.tokens)
+        tested = replay(model, sample.prompt, sample.tokens, margin_limit)
         result.near_tie_count += tested.near_tie_count
+        result.worst_margin = max(result.worst_margin or 0.0, tested.worst_margin or 0.0)
         if not tested.passed and result.passed:
             result.passed = False
             result.first_bad_position = [sample_index] + tested.first_bad_position
@@ -393,7 +415,7 @@ class NativeReplayError(RuntimeError):
 
 def native_record(w: Workload, measurement, model, transport: str) -> dict:
     records, load_s, warmup_s = measurement
-    correctness = replay_samples(model, records)
+    correctness = replay_samples(model, records, NATIVE_MARGIN)
     if not correctness.passed:
         raise NativeReplayError(w.name, correctness)
     total_s = statistics.median(s.total_s for s in records)
@@ -477,7 +499,7 @@ def evaluate(engine_dir: Path, model_path: str, workloads: list[Workload], sampl
             # its own gate, so this workload carries no verdict. 'harness_error' is
             # outside keep_decision's allowed set, so the run cannot be kept and is
             # raised to the operator to retry rather than charged to the engine.
-            note = (f"native reference missed the {MARGIN} tie budget by "
+            note = (f"native reference missed its calibrated {NATIVE_MARGIN} noise floor by "
                     f"{e.correctness.margin} at {e.correctness.first_bad_position}; "
                     "retry, and recalibrate the budget if it recurs")
             print(f"HARNESS: {w.name}: {note}", flush=True)
