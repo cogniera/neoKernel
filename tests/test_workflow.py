@@ -11,9 +11,75 @@ from neokernel.guard import check
 from neokernel.loop import apply_proposal, validate_files, generated_diff, history_summary, validate_proposal, retry_call
 from neokernel.profile import aggregate_events
 from neokernel.schema import Proposal, select_workloads
-from neokernel.storage import Budget, append_log, read_log, restore, seed_native, snapshot
+from neokernel.judge import MARGIN, NativeReplayError, keep_decision
+from neokernel.schema import Correctness
+from neokernel.storage import (Budget, append_log, failed_gates, read_log, restore, seed_native,
+                               snapshot)
 from neokernel.sweep import points, set_tunables, tunables, wire_rmsnorm
 from neokernel.accounting import SpendLedger, estimate_usd, GPU_IDLE_S
+
+
+class RecordIntegrityTests(unittest.TestCase):
+    """The log may not record a keep its own evidence contradicts (experiment 39)."""
+
+    def workloads(self, correctness=True):
+        return [{"name": "public-2", "gates": {"correctness": correctness, "memory_limit": True},
+                 "failure_code": None if correctness else "incorrect_output", "tps": 2000.0},
+                {"name": "h-c", "gates": {"correctness": True, "memory_limit": True}, "tps": 3000.0}]
+
+    def test_keep_refused_when_a_gate_the_row_carries_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = {"eligible": False, "geomean_tps": 700.0, "workloads": self.workloads(correctness=False)}
+            with self.assertRaises(ValueError) as caught:
+                append_log(result, kept=True, item="residual_fuse_norm",
+                           note="kept by Dryft official run: 697.2 tok/s", directory=root)
+            self.assertIn("public-2:correctness", str(caught.exception))
+            self.assertEqual(read_log(root), [], "a refused keep must not be written at all")
+
+    def test_keep_refused_when_the_row_is_ineligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = {"eligible": False, "geomean_tps": 700.0, "workloads": self.workloads()}
+            with self.assertRaises(ValueError):
+                append_log(result, kept=True, item="x", directory=Path(tmp))
+
+    def test_passing_evidence_and_evidence_free_rows_still_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            append_log({"eligible": True, "geomean_tps": 700.0, "workloads": self.workloads()},
+                       kept=True, item="good", directory=root)
+            # A decision made elsewhere carries no workloads, so nothing contradicts it.
+            append_log({"geomean_tps": 100}, kept=True, item="external", directory=root)
+            # A failing row is still recorded as long as it does not claim a keep.
+            append_log({"eligible": False, "workloads": self.workloads(correctness=False)},
+                       kept=False, item="rejected", directory=root)
+            self.assertEqual([r["kept"] for r in read_log(root)], [True, True, False])
+
+    def test_failed_gates_names_every_failure(self):
+        self.assertEqual(failed_gates({"workloads": self.workloads(correctness=False)}),
+                         ["public-2:correctness"])
+        self.assertEqual(failed_gates(None), [])
+
+
+class NativeOracleTests(unittest.TestCase):
+    """Native missing its own tie budget is an infrastructure fault, not a verdict."""
+
+    def test_native_replay_error_is_outside_the_keepable_failure_codes(self):
+        # keep_decision raises on any code it does not allow, so a run whose
+        # native reference misfired is surfaced for retry, never charged to the
+        # candidate and never kept.
+        run = {"eligible": False, "workloads": [{"name": "public-2", "failure_code": "harness_error",
+                                                 "gates": {"harness_error": False}}]}
+        with self.assertRaises(RuntimeError) as caught:
+            keep_decision(run, run)
+        self.assertIn("harness_error", str(caught.exception))
+
+    def test_native_replay_error_carries_the_evidence(self):
+        correctness = Correctness(False, [1, 4, 40], 2.0625, 6)
+        error = NativeReplayError("public-2", correctness)
+        self.assertEqual(error.correctness.margin, 2.0625)
+        self.assertIn("public-2", str(error))
+        self.assertGreater(error.correctness.margin, MARGIN, "only a miss above the budget should raise")
 
 
 class WorkflowTests(unittest.TestCase):

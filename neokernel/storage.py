@@ -62,9 +62,27 @@ def read_log(directory: Path = RESULTS) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def failed_gates(result: dict | None) -> list[str]:
+    """Workload gates the attached evidence itself reports as failed."""
+    return [f"{w.get('name')}:{name}" for w in (result or {}).get("workloads", [])
+            for name, ok in (w.get("gates") or {}).items() if not ok]
+
+
 def append_log(result: dict | None, *, proposer="human", item="manual", hypothesis="",
                kept=False, note="", files_changed=None, guard="pass", patch_sha256=None, proposal_sha256=None, diff='', implemented_items=None,
                directory: Path = RESULTS) -> dict:
+    # A row may not claim a keep its own evidence contradicts. Experiment 39 was
+    # written kept=True carrying gates.correctness False on public-2, because an
+    # external score was allowed to outrank the local gate; every later trial
+    # then measured against a baseline the record itself marks as wrong.
+    # The rule is contradiction, not proof: a row carrying no measured workloads
+    # records a decision made elsewhere and has nothing to contradict.
+    if kept and (result or {}).get("workloads"):
+        failures = failed_gates(result)
+        if failures:
+            raise ValueError("cannot keep a result whose own gates failed: " + ", ".join(failures))
+        if not result.get("eligible"):
+            raise ValueError("cannot keep an ineligible result")
     records = read_log(directory)
     previous = next((r for r in reversed(records) if r.get("kept") and r.get("geomean_tps")), None)
     score = result.get("geomean_tps") if result else None

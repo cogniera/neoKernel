@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agent.package import package
@@ -17,7 +18,8 @@ from .accounting import GPU_TIMEOUT_S, SpendLedger, SpendLimit, record_stop, est
 from .calibration import equivalent_estimates, load_calibration, refresh_host_factors
 from .judge import OFFICIAL
 from .schema import PUBLIC, select_workloads
-from .storage import ROOT, RESULTS, Budget, append_log, git_sha, read_log, save_run, seed_native, write_json
+from .storage import (ROOT, RESULTS, Budget, append_log, git_sha, read_log, save_run, seed_native,
+                      timestamp, write_json)
 
 
 def table(title: str, columns: list[str], rows: list[list]) -> None:
@@ -138,8 +140,20 @@ class Remote:
         started = time.perf_counter()
         try:
             result = call()
-        except BaseException:
+        except BaseException as exc:
             self.charge(timeout_s)
+            # A run that dies writes no result, so the newest file under runs/
+            # would still be the previous attempt and read as this one's. Leave
+            # a record of the attempt so freshness can never be assumed.
+            try:
+                write_json(RESULTS / "runs" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
+                                               + f"_{git_sha()[:12]}.failed.json"),
+                           {"ts": timestamp(), "sha": git_sha(), "tier": tier, "operation": operation,
+                            "eligible": False, "failed": True, "workloads": [],
+                            "error_type": type(exc).__name__, "error": str(exc)[:2000],
+                            "elapsed_s": time.perf_counter() - started})
+            except Exception:
+                pass  # Never mask the original failure with a bookkeeping error.
             try:
                 self.spend.record(tier, started, None, operation, False, **record_options)
             except SpendLimit:
@@ -148,7 +162,8 @@ class Remote:
         self.charge(result.get("gpu_seconds", 0))
         return started, result
 
-    def bench(self, payload, workloads, samples=3, correctness_only=False, refresh_native=False, transport=None):
+    def bench(self, payload, workloads, samples=3, correctness_only=False, refresh_native=False,
+              transport=None, prompt_seed=None):
         smoke = self.smoke_check and correctness_only
         if smoke and list(workloads) != [PUBLIC[0]]:
             raise ValueError('Smoke check accepts only public-0')
@@ -162,13 +177,17 @@ class Remote:
         shapes = [asdict(w) for w in workloads]
         if correctness_only:
             endpoint = self.api.check_smoke_remote if smoke else self.api.check_remote
-            call = lambda: endpoint.remote(payload, shapes, self.native)
+            call = ((lambda: endpoint.remote(payload, shapes, self.native)) if smoke else
+                    (lambda: endpoint.remote(payload, shapes, self.native, prompt_seed)))
         else:
             call = lambda: self.api.judge_remote.remote(
                 payload, shapes, samples, refresh_native, self.native, False,
-                transport=transport or (load_calibration() or {}).get("transport", "json"))
+                transport=transport or (load_calibration() or {}).get("transport", "json"),
+                prompt_seed=prompt_seed)
         started, result = self.dispatch(tier, operation, call, **record_options)
         self.native = result["native"]
+        if result.get("prompt_seed") is not None:
+            print(f"Prompt seed {result['prompt_seed']}; replay with --prompt-seed {result['prompt_seed']}", flush=True)
         save_run(result, payload)
         self.spend.record(tier, started, result["gpu_seconds"], operation, result["eligible"], **record_options)
         if not correctness_only:
@@ -248,6 +267,9 @@ def parser():
     for name in ["check", "bench", "freeze", "auto", "sweep"]:
         cmd = commands.add_parser(name)
         cmd.add_argument("--workloads", default="public-0,public-2" if name == 'sweep' else "all" if name == 'auto' else "public")
+        if name in {"check", "bench"}:
+            cmd.add_argument("--prompt-seed", type=int, default=None,
+                             help="replay a previous run's prompts; the seed is printed and saved with every run")
         if name == "bench":
             cmd.add_argument("--samples", type=int, default=3)
             cmd.add_argument("--refresh-native", action="store_true")
@@ -359,7 +381,8 @@ def main(argv=None) -> int:
                 print(f"Frozen to {args.out.resolve()}")
                 return 0
             result = remote.bench(payload, workloads, getattr(args, "samples", 1), args.command == "check",
-                                  getattr(args, "refresh_native", False), getattr(args, "transport", None))
+                                  getattr(args, "refresh_native", False), getattr(args, "transport", None),
+                                  getattr(args, "prompt_seed", None))
             report(result, args.command == "check")
             if args.command == "bench":
                 append_log(result, note="manual benchmark; no keep decision")

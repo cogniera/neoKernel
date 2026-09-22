@@ -30,6 +30,11 @@ OFFICIAL = {
 }
 
 
+# The judge's tie budget, calibrated on native against itself. One name so the
+# gate, the native-reference check and their messages cannot drift apart.
+MARGIN = 2.0
+
+
 class CandidateError(RuntimeError):
     pass
 
@@ -46,7 +51,7 @@ def validate_tokens(steps, batch: int, N: int, vocab_size: int) -> None:
         validate_step(step, batch, vocab_size)
 
 
-def check_logits(logits, emitted, margin_limit: float = 2.0) -> Correctness:
+def check_logits(logits, emitted, margin_limit: float = MARGIN) -> Correctness:
     """Compare [B,N,V] logits with [B,N] emitted IDs, on CPU or GPU."""
     import torch
     chosen = torch.as_tensor(emitted, device=logits.device, dtype=torch.long)
@@ -369,11 +374,28 @@ def pair_measurements(index: int, candidate_call, native_call):
     return candidate, native, order
 
 
+class NativeReplayError(RuntimeError):
+    """Native's own output missed the tie budget the judge enforces on candidates.
+
+    The contract calibrates the 2.0 margin on native against itself and puts the
+    resulting noise at up to 0.75 logits, so native exceeding 2.0 means the local
+    oracle, not the candidate, is out of specification: a cached decode path and
+    one full forward have diverged further than the rule allows for. Observed at
+    margin 2.0625 on H100 across the six-workload set on 2026-09-22. This is an
+    infrastructure condition to retry and calibrate, never a candidate verdict,
+    so it carries the evidence instead of reaching the caller as a bare error.
+    """
+
+    def __init__(self, workload: str, correctness):
+        self.workload, self.correctness = workload, correctness
+        super().__init__(f"local native replay failed on {workload}: {asdict(correctness)}")
+
+
 def native_record(w: Workload, measurement, model, transport: str) -> dict:
     records, load_s, warmup_s = measurement
     correctness = replay_samples(model, records)
     if not correctness.passed:
-        raise RuntimeError(f"local native replay failed: {asdict(correctness)}")
+        raise NativeReplayError(w.name, correctness)
     total_s = statistics.median(s.total_s for s in records)
     return {"source": "modal-container-native", "protocol": "paired-local-native/2", "transport": transport,
             "sample_count": len(records), "shape": asdict(w), "correctness": asdict(correctness),
@@ -438,7 +460,7 @@ def evaluate(engine_dir: Path, model_path: str, workloads: list[Workload], sampl
                 def native_call():
                     try:
                         return measure(baseline_dir, model_path, w, samples, model.config.vocab_size,
-                                       tokenizer.all_special_ids, transport=transport)
+                                       tokenizer.all_special_ids, prompt_seed, transport=transport)
                     except (CandidateError, TimeoutError, BrokenPipeError) as exc:
                         raise RuntimeError(f"native reference failed: {exc}") from exc
                 candidate_measurement, native_measurement, order = pair_measurements(index, candidate_call, native_call)
@@ -450,6 +472,17 @@ def evaluate(engine_dir: Path, model_path: str, workloads: list[Workload], sampl
             result = summarize(w, records, correctness, load_s, warmup_s,
                                torch.cuda.get_device_properties(0).total_memory, used_native.get(w.name), floors, correctness_only)
             result.measurement_order = order
+        except NativeReplayError as e:
+            # Not the candidate's fault, and not a result: the local oracle missed
+            # its own gate, so this workload carries no verdict. 'harness_error' is
+            # outside keep_decision's allowed set, so the run cannot be kept and is
+            # raised to the operator to retry rather than charged to the engine.
+            note = (f"native reference missed the {MARGIN} tie budget by "
+                    f"{e.correctness.margin} at {e.correctness.first_bad_position}; "
+                    "retry, and recalibrate the budget if it recurs")
+            print(f"HARNESS: {w.name}: {note}", flush=True)
+            result = WorkloadResult(**asdict(w), failure_code="harness_error", note=note,
+                                    gates={"harness_error": False}, floors=floors)
         except (CandidateError, TimeoutError, BrokenPipeError) as e:
             code = "timeout" if isinstance(e, TimeoutError) else "load_budget" if str(e) == "load_budget" else "candidate_error"
             result = WorkloadResult(**asdict(w), failure_code=code, note=str(e), gates={code: False}, floors=floors)

@@ -37,7 +37,7 @@ class HandRolledHandoffTests(unittest.TestCase):
             with torch.inference_mode():
                 for impl, layout, shape in itertools.product(
                         ('triton',), ('bhsd', 'bshd'),
-                        ((1, 512, 32), (4, 2048, 32), (16, 512, 128))):
+                        ((1, 512, 32), (4, 2048, 32), (16, 512, 128), (32, 256, 64))):
                     batch, length, output = shape
                     module.DECODE_CONFIG.update(attention_impl=impl, kv_layout=layout)
                     engine.shape = None

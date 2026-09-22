@@ -111,8 +111,17 @@ def cpu_diagnostics():
     return diagnostics
 
 
-def run_one(engine_tar, workloads, samples, refresh_native=False, native=None, correctness_only=False, transport="json"):
+def run_one(engine_tar, workloads, samples, refresh_native=False, native=None, correctness_only=False,
+            transport="json", prompt_seed=None):
+    """Draw the sample prompts from one recorded seed so any run can be replayed.
+
+    Without this the seed lived only inside the container and a failure could not
+    be reproduced; candidate and native also drew different prompts, so a paired
+    comparison was not actually paired.
+    """
     started = time.perf_counter()
+    if prompt_seed is None:
+        prompt_seed = secrets.randbits(62)
     diagnostics = cpu_diagnostics()
     model, tokenizer = reference()
     selected = [Workload(**w) for w in workloads]
@@ -124,8 +133,9 @@ def run_one(engine_tar, workloads, samples, refresh_native=False, native=None, c
         baseline.joinpath("engine.py").write_bytes(Path(__file__).with_name("native_engine.py").read_bytes())
         # Client-side files and official numbers never supply latency gates.
         result = evaluate(candidate, MODEL_PATH, selected, samples, model, tokenizer, _native_cache,
-                          correctness_only, baseline_dir=baseline, transport=transport,
-                          refresh_native=refresh_native).to_dict()
+                          correctness_only, prompt_seed=prompt_seed, baseline_dir=baseline,
+                          transport=transport, refresh_native=refresh_native).to_dict()
+    result["prompt_seed"] = prompt_seed
     result["gpu_seconds"] = time.perf_counter() - started
     result["cpu_diagnostics"] = diagnostics
     result["transport"] = transport
@@ -150,8 +160,9 @@ def check_smoke_remote(engine_tar: bytes, workloads: list, native: dict | None =
 
 
 @app.function(**L4_REMOTE)
-def check_remote(engine_tar: bytes, workloads: list, native: dict | None = None) -> dict:
-    result = run_one(engine_tar, workloads, 1, False, native, True)
+def check_remote(engine_tar: bytes, workloads: list, native: dict | None = None,
+                 prompt_seed: int | None = None) -> dict:
+    result = run_one(engine_tar, workloads, 1, False, native, True, prompt_seed=prompt_seed)
     result["gpu_tier"] = "L4"
     return result
 
@@ -213,8 +224,10 @@ def unit_test_remote(sources: dict[str, str]) -> dict:
 
 @app.function(**REMOTE)
 def judge_remote(engine_tar: bytes, workloads: list, samples: int = 3, refresh_native: bool = False,
-                 native: dict | None = None, correctness_only: bool = False, transport: str = "json") -> dict:
-    result = run_one(engine_tar, workloads, samples, refresh_native, native, correctness_only, transport)
+                 native: dict | None = None, correctness_only: bool = False, transport: str = "json",
+                 prompt_seed: int | None = None) -> dict:
+    result = run_one(engine_tar, workloads, samples, refresh_native, native, correctness_only, transport,
+                     prompt_seed)
     result["gpu_tier"] = "H100"
     return result
 
