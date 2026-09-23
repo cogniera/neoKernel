@@ -45,7 +45,7 @@ const stages = [
   ['Guard', 'Check the source before running it.', 'Validate file paths, syntax and allowed operations. The proposal can edit the engine and its kernels. It cannot replace the judge or its tests.', 'allowed files\n  engine/engine.py\n  engine/kernels/*.py\n\nsource guard\n  parse\n  inspect\n  accept or reject'],
   ['Test', 'Find the broken assumption.', 'Run unit tests on L4. On failure, send the error back to the same model for up to two repairs. Then check public workloads against native replay.', 'unit tests\n  fail → repair (up to 2)\n  pass → public check\n\npublic replay\n  fail → restore\n  pass → benchmark'],
   ['Measure', 'Time the complete generation.', 'Run three H100 samples per selected workload. Measure first-token latency, decode latency, throughput, memory and spread against a matching native baseline.', 'H100 / 3 samples\n  first token\n  remaining tokens\n  total throughput\n  memory\n  spread'],
-  ['Decide', 'Let the measurements decide.', 'A keep needs all gates to pass, over 1 percent aggregate improvement and no workload regression above 3 percent. Save the candidate and outcome either way.', 'all gates pass\n  + improvement > 1%\n  + regression ≤ 3%\n    → keep locally\n\notherwise\n    → snapshot and restore']
+  ['Decide', 'Let the measurements decide.', 'Accepting a candidate requires all gates to pass, over 1 percent aggregate improvement and no workload regression above 3 percent. Save the candidate and outcome either way.', 'all gates pass\n  + improvement > 1%\n  + regression ≤ 3%\n    → accept candidate\n\notherwise\n    → snapshot and restore']
 ];
 let stage = 0;
 let timer = null;

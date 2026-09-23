@@ -1,10 +1,10 @@
 # neoKernel
 
-An automated research loop for Qwen3 inference. A model proposes a source change. The harness checks it, measures it and keeps or restores the candidate. Every attempt leaves a record.
+An automated research loop for Qwen3 inference. A model proposes a source change. The harness checks it, measures it and accepts or restores the candidate. Every attempt leaves a record.
 
-**Version 1** marks the project as it stood on September 22, 2026. The documentation covers the research loop and the engine's measured progression. Each result identifies automated proposals and assisted engine work separately.
+**Version 1** marks the project as it stood on September 22, 2026. The documentation covers the research loop and selected local measurements from direct engine development and automated harness proposals.
 
-[Read the interactive documentation](docs/index.html) · [Version 1 notes](docs/v1.html) · [Experiment evidence](docs/v1-evidence.json)
+[Read the interactive documentation](docs/index.html) · [Download run records](docs/log.md)
 
 ## Open the documentation
 
@@ -21,15 +21,13 @@ Open [the local preview](http://127.0.0.1:8765/). The site has a rotatable 3D mo
 3. Validate replacement files and run the source guard.
 4. Run unit tests with up to two model repair attempts, then public correctness checks.
 5. Benchmark the candidate against the native reference.
-6. Save the result and keep or restore the candidate.
+6. Save the result and accept or restore the candidate.
 
-A local keep needs every gate to pass, more than 1% aggregate throughput improvement and no selected workload more than 3% below baseline. The candidate cannot replace the judge or its tests.
+Accepting a candidate requires every gate to pass, more than 1% aggregate throughput improvement and no selected workload more than 3% below baseline. The candidate cannot replace the judge or its tests.
 
 ## What the record shows
 
-The score progression uses one external baseline of 670.7 tok/s. A harness proposal reached a reported 697.2 tok/s after external evaluation. Assisted follow-ups scored 740.3 and 779.2 tok/s in recorded external runs. Later reported scores reached 837.1 and 859.0 tok/s, but their run IDs and workload details were not saved. See the [results and provenance](docs/v1.html).
-
-Trial 39's 697.2 result does not erase its failed local replay. Trial 37 was reverted after a lower external score. The historical [harness evidence](docs/v1-evidence.json) retains 27 entries, including failed and interrupted attempts. The external evaluator is Dryft. Its hidden workload score is separate from the local harness's public and proxy workload measurements. See the [engine contract](QWEN_ENGINE_CONTRACT.md) for evaluation rules.
+The documented results are selected local six-workload measurements. Direct development established the engine foundation, and the automated harness subsequently explored proposals on top of it. The highest locally measured candidate reached 796.0 tok/s, an 8.92% improvement over the engine used as its immediate baseline. Individual trials were not monotonic. See [the results from the runs](docs/index.html#evidence) or download the [run records](docs/log.md).
 
 ## Run the harness
 
@@ -47,7 +45,7 @@ The automated loop also needs the dependencies in [neokernel/requirements.txt](n
 py -3.11 -m neokernel auto --steps 1 --workloads all --max-gpu-minutes 60
 ```
 
-Budget reservations can stop dispatch before the requested attempt completes. Use `--resume` to recover an interrupted loop. Kept changes are committed and merged locally. The loop never pushes. See [setup and recovery](neokernel/README.md) for details.
+Budget reservations can stop dispatch before the requested attempt completes. Use `--resume` to recover an interrupted loop. Accepted changes are committed and merged locally. The loop never pushes. See [setup and recovery](neokernel/README.md) for details.
 
 ## Repository
 
@@ -60,9 +58,7 @@ Budget reservations can stop dispatch before the requested attempt completes. Us
 | `docs/` | Version 1 site, evidence snapshot and technical notes. |
 | `experiments/` | Saved experimental source outside the engine archive. |
 
-The site uses a checked-in evidence export so it works without the ignored raw results directory. [build_v1_evidence.py](docs/build_v1_evidence.py) regenerates that fixed snapshot when the local source log is available.
-
-Earlier [design notes](docs/DESIGN.md), [measurement tables](docs/RESULTS.md) and [experiment log](docs/log.md) remain as historical records. They have broader scope than the Version 1 article and can describe earlier implementations. For current harness behavior, use the source linked from the Version 1 notes.
+Earlier [design notes](docs/DESIGN.md), [measurement tables](docs/RESULTS.md) and [experiment log](docs/log.md) remain as historical records. They have broader scope than the main article and can describe earlier implementations.
 
 ## Future work
 
