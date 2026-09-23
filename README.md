@@ -2,7 +2,7 @@
 
 An automated research loop for Qwen3 inference. A model proposes a source change. The harness checks it, measures it and keeps or restores the candidate. Every attempt leaves a record.
 
-**Version 1** marks the project as it stood on September 22, 2026. The main documentation covers only the automated harness loop. Manually authored engine optimizations are outside that narrative.
+**Version 1** marks the project as it stood on September 22, 2026. The documentation covers the research loop and the engine's measured progression. Each result identifies automated proposals and assisted engine work separately.
 
 [Read the interactive documentation](docs/index.html) · [Version 1 notes](docs/v1.html) · [Experiment evidence](docs/v1-evidence.json)
 
@@ -12,7 +12,7 @@ An automated research loop for Qwen3 inference. A model proposes a source change
 python -m http.server 8765 --bind 127.0.0.1 --directory docs
 ```
 
-Open [the local preview](http://127.0.0.1:8765/). The site has a rotatable 3D model of the loop, a step-through experiment diagram, a token replay example and a browser for the recorded automated trials. It is static HTML, CSS and JavaScript with no build step. It also opens directly from `docs/index.html`.
+Open [the local preview](http://127.0.0.1:8765/). The site has a rotatable 3D model of the loop, a step-through experiment diagram, a token replay example and a score progression with one baseline. It is static HTML, CSS and JavaScript with no build step. It also opens directly from `docs/index.html`.
 
 ## The loop
 
@@ -27,11 +27,9 @@ A local keep needs every gate to pass, more than 1% aggregate throughput improve
 
 ## What the record shows
 
-The Version 1 snapshot contains 27 automated entries: three baseline checks and 24 proposal attempts. These include failed and interrupted attempts. Baselines are measurements of the current engine, not improvements produced by the loop.
+The score progression uses one external baseline of 670.7 tok/s. A harness proposal reached a reported 697.2 tok/s after external evaluation. Assisted follow-ups scored 740.3 and 779.2 tok/s in recorded external runs. Later reported scores reached 837.1 and 859.0 tok/s, but their run IDs and workload details were not saved. See the [results and provenance](docs/v1.html).
 
-Trial 37 was kept locally and later reverted after external evaluation. Trial 39 failed local replay and was later marked kept after external evaluation. Trial 44 regressed and was reverted. The [evidence notes](docs/v1.html#evidence) preserve those distinctions and the limits of the recorded sources.
-
-The external evaluator is Dryft. Its hidden workload score is separate from the local harness's public and proxy workload measurements. See the [engine contract](QWEN_ENGINE_CONTRACT.md) for evaluation rules.
+Trial 39's 697.2 result does not erase its failed local replay. Trial 37 was reverted after a lower external score. The historical [harness evidence](docs/v1-evidence.json) retains 27 entries, including failed and interrupted attempts. The external evaluator is Dryft. Its hidden workload score is separate from the local harness's public and proxy workload measurements. See the [engine contract](QWEN_ENGINE_CONTRACT.md) for evaluation rules.
 
 ## Run the harness
 

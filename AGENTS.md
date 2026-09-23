@@ -8,10 +8,12 @@ dashes in commit messages or new documentation prose.
 
 ## Documentation scope
 
-The current project milestone is Version 1. The main documentation tells the
-automated harness loop story only. Do not credit manually authored engine
-optimizations to the loop. Keep the external evaluator out of titles and
-opening copy, and mention it only where evaluation provenance requires it.
+The current project milestone is Version 1. The main documentation covers the
+automated harness loop and the measured engine progression. Use one external
+score baseline for the progression. Label agent proposals, assisted changes,
+and user-reported scores separately. An external pass does not erase a failed
+local check. Keep the external evaluator out of titles and opening copy, and
+mention it only where evaluation provenance requires it.
 
 Read the engine contract once, in full, before your first edit — the **Docs**
 page at https://htn.dryft.ai/docs, or the included

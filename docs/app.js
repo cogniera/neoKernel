@@ -93,66 +93,6 @@ byId('logit-gap').addEventListener('input', event => {
   verdict.append(comparison);
 });
 
-const evidence = window.NEOKERNEL_V1;
-if (evidence?.recorded_peaks) {
-  const {challenge, local} = evidence.recorded_peaks;
-  const peaks = [challenge.tps, local.tps].sort((a, b) => a - b);
-  byId('peak-range').textContent = `${Math.round(peaks[0])} to ${Math.round(peaks[1])} tok/s`;
-  byId('peak-sources').textContent = `Challenge peak ${challenge.tps.toFixed(1)} (trial ${challenge.trial_id}). Local peak ${local.tps.toFixed(2)} (trial ${local.trial_id}).`;
-}
-let selectedTrial = 37;
-const titles = {baseline: 'Baseline check', static_kv_cache: 'Static KV cache', lm_head_argmax: 'Output head argmax', attention_impl_kv_layout: 'Attention and cache layout', prefill_packed_weights: 'Packed prefill weights', prefill_cuda_graph: 'Prefill CUDA graph', residual_fuse_norm: 'Residual and normalization', proposal_rejected: 'Proposal not applied'};
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-function showTrial(id) {
-  selectedTrial = id;
-  const trial = evidence.entries.find(row => row.id === id);
-  byId('trial-list').querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.id) === id)));
-  const detail = byId('trial-detail');
-  const heading = element('div', 'trial-heading');
-  heading.append(element('h3', '', `${String(id).padStart(2, '0')} / ${titles[trial.item] || trial.item}`), element('span', 'badge', trial.outcome));
-  const metrics = element('div', 'trial-metrics');
-  const local = trial.local_geomean_tps;
-  const challenge = trial.challenge_tps;
-  const both = Number.isFinite(local) && Number.isFinite(challenge);
-  const label = both ? 'ROUGH OBSERVED RANGE' : Number.isFinite(challenge) ? 'CHALLENGE EVALUATION' : Number.isFinite(local) ? 'LOCAL GEOMEAN' : 'MEASUREMENT STATUS';
-  const value = both ? `${Math.min(local, challenge).toFixed(1)} to ${Math.max(local, challenge).toFixed(1)} tok/s` : Number.isFinite(challenge) ? `${challenge.toFixed(1)} tok/s` : Number.isFinite(local) ? `${local.toFixed(2)} tok/s` : 'No aggregate score';
-  const speed = element('div', '', label);
-  speed.append(element('strong', '', value));
-  const shape = element('div', '', 'RECORDED WORKLOADS');
-  shape.append(element('strong', '', String(trial.workloads.length)));
-  metrics.append(speed, shape);
-  detail.replaceChildren(heading, element('p', '', trial.explanation), metrics);
-  if (both) detail.append(element('p', 'metric-source', `Challenge ${challenge.toFixed(1)}. Local ${local.toFixed(2)}. Different workload sets, so this is a rough comparison.`));
-  else if (Number.isFinite(challenge)) detail.append(element('p', 'metric-source', 'Challenge figure from the saved log. No local aggregate score is available.'));
-}
-function renderTrials() {
-  const filter = byId('trial-filter').value;
-  const rows = evidence.entries.filter(row => (filter === 'baseline' && row.item === 'baseline') || (filter === 'measured' && (Number.isFinite(row.local_geomean_tps) || Number.isFinite(row.challenge_tps))));
-  const list = byId('trial-list');
-  list.replaceChildren();
-  for (const row of rows) {
-    const button = element('button', '', String(row.id).padStart(2, '0'));
-    button.type = 'button'; button.dataset.id = row.id;
-    button.dataset.kind = row.item === 'baseline' ? 'baseline' : [37,39,44].includes(row.id) ? 'review' : 'proposal';
-    button.setAttribute('aria-label', `Experiment ${row.id}: ${titles[row.item] || row.item}`);
-    button.addEventListener('click', () => showTrial(row.id));
-    list.append(button);
-  }
-  byId('record-count').textContent = `${rows.length} entries`;
-  showTrial(rows.some(row => row.id === selectedTrial) ? selectedTrial : rows[0].id);
-}
-if (evidence?.entries?.length) {
-  renderTrials();
-  byId('trial-filter').addEventListener('change', renderTrials);
-} else {
-  byId('trial-detail').textContent = 'Experiment data could not load. Open the evidence JSON below.';
-}
-
 document.querySelectorAll('.copy-button').forEach(button => button.addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(byId(button.dataset.copy).textContent.trim());
