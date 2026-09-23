@@ -27,7 +27,7 @@
 <div class="evidence-meta"><span>27 <small>automated entries</small></span><span>24 <small>proposal attempts</small></span><span>3 <small>baseline checks</small></span></div>
 </header>
 <div class="article-layout evidence-layout">
-<aside class="contents"><span class="eyebrow">ON THIS PAGE</span><nav aria-label="Page sections"><a href="#scope">Scope</a><a href="#early-runs">Early runs</a><a href="#evidence">Evidence</a><a href="#range">Recorded range</a><a href="#loop">Loop rules</a><a href="#sources">Sources</a></nav><div class="version-note">v1<br><span>September 2026</span></div></aside>
+<aside class="contents"><span class="eyebrow">ON THIS PAGE</span><nav aria-label="Page sections"><a href="#scope">Scope</a><a href="#early-runs">Early runs</a><a href="#evidence">Evidence</a><a href="#range">Recorded range</a><a href="#loop">Loop rules</a><a href="#measurement">Measurement</a><a href="#sources">Sources</a></nav><div class="version-note">v1<br><span>September 2026</span></div></aside>
 <article>
 <section id="scope" class="prose">
 <div class="eyebrow">SCOPE</div><h2>The automated loop only.</h2>
@@ -50,7 +50,7 @@
 <tr><td>12</td><td>Baseline failed</td><td>No eligible aggregate score</td></tr>
 <tr><td>29, 35</td><td>Measured, not kept</td><td>A score alone was not enough</td></tr>
 <tr><td>38</td><td>Repairs exhausted</td><td>The candidate was not accepted</td></tr>
-<tr><td>39</td><td>External keep only</td><td>Local replay still failed</td></tr>
+<tr><td>39</td><td>External keep only</td><td>Local replay still failed; the log now refuses such a row</td></tr>
 <tr><td>44</td><td>Regression</td><td>The candidate was reverted</td></tr>
 </tbody></table></div>
 <div class="source-links"><a href="v1-evidence.json">Download the evidence JSON <span>↓</span></a><a href="index.html#evidence">Open the interactive experiment browser <span>↗</span></a></div>
@@ -65,6 +65,17 @@
 <div class="eyebrow">CURRENT LOOP</div><h2>What happens to a proposal.</h2>
 <ol class="evidence-steps"><li>Measure the current engine.</li><li>Ask for a bounded source change.</li><li>Run source checks and unit tests.</li><li>Give a failed test back to the model for up to two repairs.</li><li>Check public correctness before the H100 benchmark.</li><li>Keep only a valid improvement with no large workload regression.</li><li>Save the result and restore or merge the candidate.</li></ol>
 <p>The current implementation is authoritative when an older note describes an earlier stage of the harness.</p>
+<h3>Record integrity</h3>
+<p>An entry cannot record a keep that its own attached evidence contradicts. The log refuses a keep when any workload in the result reports a failed gate, or when the result is not eligible. The rule is contradiction rather than proof, so an entry that carries no measured workloads still records a decision taken elsewhere.</p>
+<p>This followed trial 39, which was written as a keep while carrying a failed correctness gate, because an external score was allowed to outrank the local one. Every later trial then measured against a baseline the record itself marks as wrong. That row is preserved as it was written.</p>
+<p>A run that dies before producing a result now leaves a record of the attempt, marked failed and ineligible. Without it the newest saved run was the previous one and could be read as the current one.</p>
+</section>
+<section id="measurement" class="prose">
+<div class="eyebrow">MEASUREMENT</div><h2>Evidence you can replay.</h2>
+<p>Every run draws its sample prompts from one recorded seed, saved on the result and printed back as a flag. The candidate and the native reference are measured on the same prompts, so a paired comparison is paired in fact, and a correctness result can be replayed instead of retold.</p>
+<p>Each replay also records the worst margin it saw, whether or not it passed. A passing run used to report no headroom at all, which made an engine sitting close to the limit indistinguishable from one with room to spare until it finally failed.</p>
+<p>The native reference is held to its own budget of 0.75 logits, replayed against itself. That is a measurement floor rather than a verdict on any candidate, and it is calibrated: across two seeded five-sample runs of all six workloads, the reference's worst self-replay margin was 0.5, and the engine contract documents this noise as up to 0.75. When the reference exceeds it, the run has left the regime the candidate margin was calibrated in, so that workload is reported as a harness error and retried rather than charged to the candidate.</p>
+<div class="rules"><div><span>Candidate correctness</span><strong>&le; 2.0 logit gap</strong></div><div><span>Native noise floor</span><strong>&le; 0.75 logits</strong></div><div><span>Worst observed native</span><strong>0.5 logits</strong></div></div>
 </section>
 <section id="sources" class="prose">
 <div class="eyebrow">SOURCES</div><h2>Inspect the record.</h2>
