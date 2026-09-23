@@ -46,7 +46,7 @@ The automated loop also needs the dependencies in [neokernel/requirements.txt](n
 
 ```powershell
 # One proposal attempt. Uses paid GPU and model inference.
-py -3.11 -m neokernel auto --steps 1 --workloads all --max-gpu-minutes 5
+py -3.11 -m neokernel auto --steps 1 --workloads all --max-gpu-minutes 60
 ```
 
 Budget reservations can stop dispatch before the requested attempt completes. Use `--resume` to recover an interrupted loop. Kept changes are committed and merged locally. The loop never pushes. See [setup and recovery](neokernel/README.md) for details.
